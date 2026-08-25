@@ -4,7 +4,7 @@
 </div>
 
 
-Scalpel 是 Highway-VL 的逐层结构化剪枝工具。它的恢复目标只有一个：
+Scalpel 是用于多模态大模型的逐层结构化剪枝工具。它的恢复目标只有一个：
 
 > 删除 Student 的当前第 $i$ 层后，只训练 Student 的第 $i-1$ 层，使 Student 的边界输出模拟 Teacher 原第 $i$ 层的输出。
 
