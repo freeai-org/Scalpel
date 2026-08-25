@@ -16,6 +16,7 @@ Scalpel 是用于多模态大模型的逐层结构化剪枝工具。它的恢复
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/dGVEz_s2Qvl0D-5ebWUa5.png" alt="Scalpel-VL overall architecture preview" width="400"/>
 </div>
 
+**🚄 模型路径：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B
 
 
 ## 🚄 方法概览
