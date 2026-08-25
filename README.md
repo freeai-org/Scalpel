@@ -1,4 +1,4 @@
-# Scalpel：Recovery-Aware Layer Pruning for Faster Vision-Language Models
+# ✂️ Scalpel：Recovery-Aware Layer Pruning for Faster Vision-Language Models
 <div align="center">
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/TsDLjZIblTgMjdDkJ0feU.png" alt="FelineBench benchmark visualization" width="420"/>
 </div>
@@ -18,7 +18,7 @@ Scalpel 是用于多模态大模型的逐层结构化剪枝工具。它的恢复
 
 
 
-## 方法概览
+## 🚄 方法概览
 
 每一轮按照下面顺序执行：
 
@@ -35,7 +35,7 @@ Scalpel 是用于多模态大模型的逐层结构化剪枝工具。它的恢复
 
 因此，恢复过程不是把所有线性层加 LoRA，也不是让删层后的 Student 拟合固定的原始 28 层模型最终 logits。Teacher 是**本轮删层前的当前模型**，每轮都会随模型状态更新。
 
-## 边界目标与 loss
+## 🏋️ 边界目标与 loss
 
 设本轮删除当前层 $i$：
 
@@ -76,7 +76,7 @@ $$
 - 训练日志记录 loss 和 boundary_weighted_kl；两者在当前实现中相同。
 - 当前恢复训练没有 hard-label CE、最终层 CE、隐藏态 cosine loss，也没有 LoRA adapter。
 
-## 层号和 Teacher/Student 对齐
+## 📖 层号和 Teacher/Student 对齐
 
 假设删层前 Teacher 有 $N$ 层：
 
@@ -201,7 +201,7 @@ prune_layer.py 只负责结构化删除和保存，不负责恢复训练。
 | eval_summarize.py | 汇总评估目录中的指标 |
 | tests/ | 层映射、边界 KL、训练日志和 probe 逻辑测试 |
 
-## 输出审计
+## 💁 输出审计
 
 每个恢复训练目录至少包含：
 
@@ -213,7 +213,7 @@ prune_layer.py 只负责结构化删除和保存，不负责恢复训练。
 
 模型导出时，highway_state.json 的 recoveries 记录本轮 Teacher、删除层、Student 边界层和恢复方法。Orchestrator 会拒绝没有 previous_layer_boundary_kd_v1 标记的旧训练结果，避免把旧的全量恢复协议混入新实验。
 
-## 测试
+## 🚶‍♀️‍➡️ 测试
 
 ~~~bash
 python -m compileall -q highway/Scalpel
@@ -231,3 +231,16 @@ rmdir "$tmpdir"
 ~~~
 
 历史 highway/results/ 下若是旧的全量线性层恢复结果，不应直接续跑；请为边界协议使用新的 run-dir 和 model-root。
+
+## 📕 引用
+```text
+@misc{wu2026soulgardvl2bvisionlanguagemodeledgebased,
+      title={SoulGard-VL-2B: A Vision-Language Model for Edge-Based Feline Behavior Understanding}, 
+      author={YuHang Wu and HaoXian Liu and Jia Tao},
+      year={2026},
+      eprint={2608.22070},
+      archivePrefix={arXiv},
+      primaryClass={cs.CE},
+      url={https://arxiv.org/abs/2608.22070}, 
+}
+```
