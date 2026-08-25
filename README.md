@@ -8,11 +8,15 @@ Scalpel 是用于多模态大模型的逐层结构化剪枝工具。它的恢复
 
 > 删除 Student 的当前第 $i$ 层后，只训练 Student 的第 $i-1$ 层，使 Student 的边界输出模拟 Teacher 原第 $i$ 层的输出。
 
-这里的“第 $i$ 层”都是当前模型的 **0-based language-decoder layer index**。一轮剪枝严格对应一份删层前的 Teacher 和一份删层后的 Student。
+这里的“第 $i$ 层”都是当前模型的 **language-decoder layer index**。一轮剪枝严格对应一份删层前的 Teacher 和一份删层后的 Student。
+
+****
 
 <div align="center">
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/dGVEz_s2Qvl0D-5ebWUa5.png" alt="Scalpel-VL overall architecture preview" width="400"/>
 </div>
+
+
 
 ## 方法概览
 
