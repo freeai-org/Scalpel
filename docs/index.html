@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Scalpel：面向多模态大模型的恢复感知、逐层结构化剪枝方法。每轮定位一个安全切口，只训练切口前一层完成局部边界恢复。"
+    />
+    <meta name="theme-color" content="#0a1724" />
+    <meta property="og:title" content="Scalpel · Recovery-aware VLM Pruning" />
+    <meta
+      property="og:description"
+      content="Scalpel:Recovery-Aware Layer Pruning for Faster Vision-Language Models"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="assets/scalpel-logo.png" />
+    <title>Scalpel · Recovery-aware VLM Pruning</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700;800&amp;family=Noto+Sans+SC:wght@400;500;600;700;800&amp;display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到正文</a>
+    <div class="page-progress" aria-hidden="true"><span id="page-progress-bar"></span></div>
+
+    <header class="site-header" id="top">
+      <div class="shell nav-wrap">
+        <a class="brand" href="#top" aria-label="Scalpel 首页">
+          <img class="brand-mark" src="assets/scalpel-logo.png" alt="" />
+          <span>SCALPEL<span class="brand-dot">.</span></span>
+        </a>
+
+        <nav class="desktop-nav" aria-label="主导航">
+          <a href="#method">方法</a>
+          <a href="#results">结果</a>
+          <a href="#loss">Loss</a>
+          <a href="#rounds">逐轮实验</a>
+          <a href="#reproduce">复现</a>
+        </nav>
+
+        <div class="nav-actions">
+          <a
+            class="github-link"
+            href="https://github.com/freeai-org/Scalpel"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="在 GitHub 查看 Highway 源码"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 .7a11.6 11.6 0 0 0-3.7 22.6c.6.1.8-.2.8-.5v-2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.1 0 0 1-.3 3.1 1.2a10.7 10.7 0 0 1 5.6 0c2.1-1.5 3.1-1.2 3.1-1.2.6 1.5.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5A11.6 11.6 0 0 0 12 .7Z" />
+            </svg>
+            <span>Code</span>
+          </a>
+          <button class="menu-button" id="menu-button" aria-expanded="false" aria-controls="mobile-nav">
+            <span></span><span></span>
+            <span class="sr-only">打开菜单</span>
+          </button>
+        </div>
+      </div>
+      <nav class="mobile-nav" id="mobile-nav" aria-label="移动端导航">
+        <a href="#method">方法</a><a href="#results">结果</a><a href="#loss">Loss</a>
+        <a href="#rounds">逐轮实验</a><a href="#reproduce">复现</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero section-dark">
+        <div class="hero-grid shell">
+          <div class="hero-copy reveal">
+            <div class="eyebrow light"><span></span> RECOVERY-AWARE STRUCTURAL PRUNING</div>
+            <h1>
+              Local Cut<br />
+              <em>Local Recovery</em>
+            </h1>
+            <p class="hero-lede">
+              Scalpel 不是一次删掉一批层。它每轮只定位一个安全切口，
+              只更新切口前一层来修复局部边界，再基于恢复后的新模型重新寻找下一层。
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#method">探索方法 <span>↘</span></a>
+              <a
+                class="button button-ghost"
+                href="https://github.com/freeai-org/Scalpel"
+                target="_blank"
+                rel="noreferrer"
+              >查看源码</a>
+            </div>
+          </div>
+
+          <div class="hero-visual reveal" data-delay="100">
+            <div class="visual-orbit orbit-one"></div>
+            <div class="visual-orbit orbit-two"></div>
+            <div class="hero-logo-card">
+              <span class="logo-card-label">LOCAL CUT · LOCAL RECOVERY</span>
+              <img
+                src="assets/scalpel-logo.png"
+                alt="Scalpel 项目 Logo：科研医生用手术刀移除大模型的一个中间层"
+              />
+            </div>
+            <div class="micro-note note-a"></div>
+            <div class="micro-note note-b"></div>
+          </div>
+        </div>
+
+        <div class="hero-stats shell reveal" data-delay="180">
+          <div><span>01 / LAYERS</span><strong>28 → 19</strong><small>32.1% decoder layers removed</small></div>
+          <div><span>02 / ACCURACY</span><strong>−0.36 pp</strong><small>post-recovery macro accuracy</small></div>
+          <div><span>03 / SPEED</span><strong>+43.5%</strong><small>1.172 items / second</small></div>
+          <div><span>04 / MODEL</span><strong>1.674B</strong><small>final parameters · BF16</small></div>
+        </div>
+        <div class="hero-rule" aria-hidden="true"><span>SCROLL TO DISSECT</span></div>
+      </section>
+
+      <section class="section method-section" id="method">
+        <div class="shell">
+          <div class="section-heading reveal">
+            <div class="section-index">01</div>
+            <div>
+              <div class="eyebrow"><span></span> THE METHOD</div>
+              <h2>每一刀，都先测再愈合。</h2>
+              <p>每轮以删层前的当前模型作为冻结 teacher；student 改变后，安全层也必须重新定位。</p>
+            </div>
+          </div>
+
+          <div class="process-grid">
+            <article class="process-card reveal">
+              <span class="process-number">01</span><span class="process-icon teal">P</span>
+              <h3>Probe</h3>
+              <p>在固定 10×10 probe 上临时绕过每个候选层，模型文件保持不变。</p>
+              <small>TEMPORARY BYPASS</small>
+            </article>
+            <article class="process-card reveal" data-delay="60">
+              <span class="process-number">02</span><span class="process-icon green">R</span>
+              <h3>Rank</h3>
+              <p>同时衡量任务后悔值与词表分布漂移，避免一个好指标掩盖另一项风险。</p>
+              <small>MINIMAX RISK</small>
+            </article>
+            <article class="process-card reveal" data-delay="120">
+              <span class="process-number">03</span><span class="process-icon red">C</span>
+              <h3>Cut</h3>
+              <p>物理删除风险最低的一层，更新 config、attention 索引与原始层映射。</p>
+              <small>STRUCTURAL DELETE</small>
+            </article>
+            <article class="process-card reveal" data-delay="180">
+              <span class="process-number">04</span><span class="process-icon orange">K</span>
+              <h3>Recover</h3>
+              <p>冻结本轮 teacher 与 student 其余参数，只训练删除边界前一层，完成局部恢复。</p>
+              <small>LOCAL BOUNDARY KD</small>
+            </article>
+          </div>
+
+          <div class="risk-panel reveal">
+            <div class="risk-copy">
+              <span class="mini-label">THE SELECTION RULE</span>
+              <h3>最坏轴决定风险。</h3>
+              <p>
+                固定 probe 集保证候选层比较一致。生成准确率下降和 logits 漂移都归一化到 [0, 1]，
+                每个 repeat 取两者最大值，再跨 10 个 repeat 求平均。得分最低的层才会被真正删除。
+              </p>
+            </div>
+            <div class="formula-card" aria-label="剪枝风险公式">
+              <div><span>hard regret</span><code>Rᵣ,ₗ = clip((Aʳᵉᶠ − Aᶜᵃⁿᵈ) / Aʳᵉᶠ)</code></div>
+              <div><span>logit drift</span><code>Jᵣ,ₗ = weighted JS / log 2</code></div>
+              <div class="formula-result"><span>pruning risk</span><code>Qᵣ,ₗ = max(Rᵣ,ₗ, Jᵣ,ₗ)</code></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section results-section" id="results">
+        <div class="shell">
+          <div class="section-heading light reveal">
+            <div class="section-index">02</div>
+            <div>
+              <div class="eyebrow light"><span></span> THE TRADE-OFF</div>
+              <h2>少九层，任务准确率几乎不动。</h2>
+              <p>完整验证集 2,609 条样本；速度和准确率均为每轮 post-recovery 模型实测。</p>
+            </div>
+          </div>
+
+          <div class="tradeoff-grid">
+            <article class="chart-card reveal">
+              <div class="card-head">
+                <div><span class="mini-label">ROUND 00 — 09</span><h3>Accuracy × Speed</h3></div>
+                <div class="chart-legend" aria-label="图例">
+                  <span><i class="legend-accuracy"></i>准确率</span>
+                  <span><i class="legend-speed"></i>速度提升</span>
+                </div>
+              </div>
+              <div class="chart-wrap" id="tradeoff-chart" role="img" aria-label="九轮剪枝后的准确率与速度提升趋势图"></div>
+              <div class="chart-foot"><span>Macro field accuracy (%)</span><span>Speed delta vs. baseline (%)</span></div>
+            </article>
+
+            <article class="result-callout reveal" data-delay="100">
+              <span class="mini-label">FINAL CHECKPOINT</span>
+              <div class="big-number">19<span>L</span></div>
+              <h3>Round 09</h3>
+              <dl>
+                <div><dt>Macro accuracy</dt><dd>83.85%</dd></div>
+                <div><dt>Accuracy delta</dt><dd>−0.36 pp</dd></div>
+                <div><dt>Inference speed</dt><dd>1.172 it/s</dd></div>
+                <div><dt>Parse success</dt><dd>100%</dd></div>
+              </dl>
+              <div class="recovery-meter">
+                <div><span>pre-recovery</span><strong>59.28%</strong></div>
+                <div class="meter-track"><i></i></div>
+                <div><span>post-recovery</span><strong>83.85%</strong></div>
+              </div>
+            </article>
+          </div>
+
+          <div class="field-panel reveal">
+            <div class="field-copy">
+              <span class="mini-label">ATOMIC FIELD VIEW</span>
+              <h3>最终模型保留了什么？</h3>
+              <p>
+                10 个业务字段共同构成 macro accuracy。Round 09 在毛发状态和整体身体姿态上略有提升，
+                主要损失集中在尾部与垂直位置判断。
+              </p>
+              <div class="field-summary">
+                <span><i class="baseline-dot"></i>Baseline 28L</span>
+                <span><i class="final-dot"></i>Final 19L</span>
+              </div>
+            </div>
+            <div class="field-chart" id="field-chart" role="img" aria-label="Baseline 与最终模型的十个原子字段准确率对比"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section loss-section" id="loss">
+        <div class="shell">
+          <div class="section-heading reveal">
+            <div class="section-index">03</div>
+            <div>
+              <div class="eyebrow"><span></span> LOCAL BOUNDARY RECOVERY</div>
+              <h2>只修复切口附近的一层。</h2>
+              <p>Teacher 是本轮删层前的模型；Student 仅解冻第 i−1 层，其余参数全部保持冻结。</p>
+            </div>
+          </div>
+
+          <div class="loss-grid">
+            <div class="loss-equation-card reveal">
+              <span class="mini-label">BOUNDARY ALIGNMENT</span>
+              <div class="main-equation boundary-equation">
+                <span>q</span><sub>i</sub><sup>T</sup><b>≈</b><span>q</span><sub>i−1</sub><sup>S</sup>
+              </div>
+              <div class="equation-detail">
+                <div><strong>Teacher · i</strong><p>从本轮删层前模型读取被删除层的边界输出，并保持冻结。</p></div>
+                <div><strong>Student · i−1</strong><p>只更新切口前一层，使其软分布逼近 teacher 边界。</p></div>
+              </div>
+              <div class="normalization-note">
+                <code>ℒboundary = weighted KL(qᵀᵢ ∥ qˢᵢ₋₁)</code>
+                <span>每条样本先按有效 token 权重归一化，再对 batch 求平均。</span>
+              </div>
+            </div>
+
+            <div class="weight-card reveal" data-delay="80">
+              <span class="mini-label">FIELD WEIGHTS</span>
+              <h3>把局部修复聚焦在关键字段。</h3>
+              <div class="weight-list">
+                <div><span>3.0×</span><p>action · body · ears · tail · face · fur</p><i style="--w: 100%"></i></div>
+                <div><span>2.0×</span><p>cats_visible</p><i style="--w: 66.6%"></i></div>
+                <div><span>1.0×</span><p>default · environment</p><i style="--w: 33.3%"></i></div>
+                <div><span>0.5×</span><p>JSON format characters</p><i style="--w: 16.6%"></i></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="loss-figures">
+            <figure class="loss-figure paper-card reveal">
+              <div class="figure-title">
+                <div><span class="mini-label">TASK FIT</span><h3>Field-weighted CE</h3></div>
+                <p>Round 01 — 09</p>
+              </div>
+              <div class="figure-media">
+                <img src="assets/round_01_09_ce_loss.png" alt="Round 01 到 09 的字段加权 CE loss 曲线" />
+                <button class="figure-zoom" data-dialog-image="assets/round_01_09_ce_loss.png" aria-label="放大 CE Loss 曲线">
+                  <span>EXPAND ↗</span>
+                </button>
+              </div>
+              <figcaption><span>Fig. 01</span> CE 在每轮早期快速下降，随后进入相近的稳定区间。</figcaption>
+            </figure>
+
+            <figure class="loss-figure paper-card reveal" data-delay="80">
+              <div class="figure-title">
+                <div><span class="mini-label">DISTRIBUTION ALIGNMENT</span><h3>Teacher → Student KL</h3></div>
+                <p>Round 01 — 09</p>
+              </div>
+              <div class="figure-media">
+                <img src="assets/round_01_09_kl_loss.png" alt="Round 01 到 09 的 Teacher 到 Student KL 散度曲线" />
+                <button class="figure-zoom" data-dialog-image="assets/round_01_09_kl_loss.png" aria-label="放大 KL 散度曲线">
+                  <span>EXPAND ↗</span>
+                </button>
+              </div>
+              <figcaption><span>Fig. 02</span> KL 持续收敛，展示 teacher 与 student 分布逐步对齐。</figcaption>
+            </figure>
+          </div>
+
+          <div class="recovery-strip reveal">
+            <div><span>ROUND TEACHER</span><strong>Current N-layer model</strong><small>frozen · before deletion</small></div>
+            <div class="strip-arrow">→</div>
+            <div><span>ONLY TRAINABLE</span><strong>Student layer i−1</strong><small>local boundary repair</small></div>
+            <div class="strip-arrow">→</div>
+            <div><span>NEXT ROUND</span><strong>Recovered N−1 model</strong><small>all other parameters frozen</small></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section rounds-section" id="rounds">
+        <div class="shell">
+          <div class="section-heading reveal">
+            <div class="section-index">04</div>
+            <div>
+              <div class="eyebrow"><span></span> NINE SURGICAL CUTS</div>
+              <h2>逐轮查看被移除的原始层。</h2>
+              <p>选择一个 Round，观察 28 层原始模型如何逐步变成 19 层 student。</p>
+            </div>
+          </div>
+
+          <div class="round-explorer reveal">
+            <div class="round-controls" id="round-controls" aria-label="选择剪枝轮次"></div>
+            <div class="round-stage">
+              <div class="layer-map-wrap">
+                <div class="layer-map-head">
+                  <div><span class="mini-label">ORIGINAL LAYER MAP</span><h3 id="selected-round-title">Round 09 · 19 layers remain</h3></div>
+                  <div class="map-legend"><span><i></i>保留</span><span><i></i>本轮删除</span><span><i></i>此前删除</span></div>
+                </div>
+                <div class="layer-map" id="layer-map"></div>
+              </div>
+              <aside class="round-detail" id="round-detail" aria-live="polite"></aside>
+            </div>
+          </div>
+
+          <div class="table-card reveal">
+            <div class="card-head">
+              <div><span class="mini-label">FULL EXPERIMENT LOG</span><h3>Post-recovery checkpoints</h3></div>
+              <button class="table-toggle" id="table-toggle" aria-expanded="false">展开全部指标 <span>↓</span></button>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Round</th><th>删除原始层</th><th>剩余层</th><th>Macro Acc.</th>
+                    <th>Δ Accuracy</th><th>Speed</th><th>Speed-up</th><th class="optional-col">Probe Risk</th>
+                  </tr>
+                </thead>
+                <tbody id="round-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="boundary-card reveal">
+            <div>
+              <span class="mini-label">CAPABILITY BOUNDARY</span>
+              <h3>视觉业务能力稳定，不等于通用知识能力无损。</h3>
+              <p>Recovery 数据针对猫姿态 JSON 任务。MMLU / C-Eval 显示，持续删层仍会显著损伤通用纯文本选择题能力。</p>
+            </div>
+            <div class="benchmark-table">
+              <div class="benchmark-row head"><span>Checkpoint</span><span>MMLU</span><span>C-Eval</span><span>Avg.</span></div>
+              <div class="benchmark-row"><strong>Round 01</strong><span>50.48</span><span>50.67</span><span>50.58</span></div>
+              <div class="benchmark-row"><strong>Round 05</strong><span>29.40</span><span>28.55</span><span>28.98</span></div>
+              <div class="benchmark-row final"><strong>Round 09</strong><span>23.29</span><span>23.81</span><span>23.55</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section reproduce-section" id="reproduce">
+        <div class="shell">
+          <div class="section-heading light reveal">
+            <div class="section-index">05</div>
+            <div>
+              <div class="eyebrow light"><span></span> REPRODUCE</div>
+              <h2>两条命令，启动完整闭环。</h2>
+              <p>先固定 probe 与实验指纹，再启动支持断点续跑的九轮编排器。</p>
+            </div>
+          </div>
+
+          <div class="code-grid">
+            <article class="code-card reveal">
+              <div class="code-head"><span><b>01</b> Prepare immutable inputs</span><button class="copy-button" data-copy-target="prepare-code">COPY</button></div>
+              <pre id="prepare-code"><code>PYTHONPATH="$PROJECT_ROOT" "$PYTHON_BIN" \
+  -m highway.prune_prepare \
+  --model "$REFERENCE_MODEL" \
+  --train-data "$TRAIN_JSON" \
+  --val-data "$VAL_JSON" \
+  --run-dir "$RUN_DIR" \
+  --repeats 10 \
+  --samples-per-repeat 10 \
+  --rounds 9 \
+  --recovery-epochs 2</code></pre>
+            </article>
+            <article class="code-card reveal" data-delay="80">
+              <div class="code-head"><span><b>02</b> Run pruning + recovery</span><button class="copy-button" data-copy-target="run-code">COPY</button></div>
+              <pre id="run-code"><code>PYTHONPATH="$PROJECT_ROOT" CUDA_VISIBLE_DEVICES=0 \
+"$PYTHON_BIN" -m highway \
+  --project-root "$PROJECT_ROOT" \
+  --python "$PYTHON_BIN" \
+  --eval-script "$PROJECT_ROOT/sft_scripts/eval_universal_json.py" \
+  --reference-model "$REFERENCE_MODEL" \
+  --train-data "$TRAIN_JSON" \
+  --val-data "$VAL_JSON" \
+  --run-dir "$RUN_DIR" \
+  --model-root "$MODEL_ROOT" \
+  --rounds 9 \
+  --recovery-effective-batch-size 16 \
+  --recovery-epochs 2</code></pre>
+            </article>
+          </div>
+
+          <div class="file-flow reveal">
+            <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>PREPARE</span><strong>prune_prepare.py</strong><small>manifest + fingerprints</small></a>
+            <i>→</i>
+            <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>LOCALIZE</span><strong>prune_probe.py</strong><small>hard regret + JS</small></a>
+            <i>→</i>
+            <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>DELETE</span><strong>prune_layer.py</strong><small>physical layer removal</small></a>
+            <i>→</i>
+            <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>RECOVER</span><strong>train_weighted_kd.py</strong><small>local boundary KD</small></a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-grid">
+        <div>
+          <a class="brand footer-brand" href="#top">
+            <img class="brand-mark" src="assets/scalpel-logo.png" alt="" />
+            <span>SCALPEL<span class="brand-dot">.</span></span>
+          </a>
+          <p>Recovery-aware local boundary pruning for VLMs.</p>
+        </div>
+        <div><span>PROJECT</span><a href="#method">Method</a><a href="#results">Results</a><a href="#reproduce">Reproduce</a></div>
+        <div><span>RESOURCES</span><a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer">Documentation</a></div>
+      </div>
+      <div class="shell footer-bottom"><span>FreeAI · SCALPEL</span><span>28 → 19 LAYERS · 2026</span></div>
+    </footer>
+
+    <dialog class="figure-dialog" id="figure-dialog">
+      <button id="dialog-close" aria-label="关闭大图">×</button>
+      <img id="dialog-image" alt="放大的实验图" />
+    </dialog>
+  </body>
+</html>
