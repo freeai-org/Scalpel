@@ -7,6 +7,7 @@ Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只
 </div>
 
 **Scalpel-VL-1.6B 模型仓库：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B
+
 **Scalpel 完整介绍：** https://freeai-org.github.io/Scalpel/
 
 ****
