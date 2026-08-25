@@ -6,7 +6,8 @@ Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/TsDLjZIblTgMjdDkJ0feU.png" alt="FelineBench benchmark visualization" width="420"/>
 </div>
 
-**模型路径：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B
+**Scalpel-VL-1.6B 模型仓库：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B
+**Scalpel 完整介绍：** https://freeai-org.github.io/Scalpel/
 
 ****
 
@@ -14,29 +15,46 @@ Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只
 
 每一轮执行：
 
-1. 在固定 probe 集上临时绕过候选层，计算任务准确率下降和 logits JS 漂移。
+1. 在固定 probe 集上临时绕过候选层，计算任务准确率下降和 logits 分布漂移。
 2. 用 `max(relative_hard_regret, normalized_js)` 作为该层风险，选择风险最低的当前层。
 3. 物理删除该层，保存 `pre_recovery_model`。
 4. 用固定 reference teacher 和删层后的 student 做 teacher-forcing 恢复训练。
 5. Student 挂 LoRA，目标模块为 `all-linear`；训练完成后 merge LoRA 并导出 `post_recovery_model`。
 6. `post_recovery_model` 作为下一轮要继续剪枝的当前模型；teacher 仍然是固定 reference。
 
+## 📏评估
+
+逐步移除Transformer层后模型精度与推理速度变化。随着剪枝轮次增加，推理速度持续提升，精度损失整体可控。
+
+| Round | 删除原始层 | 剩余层 | Acc. | $\Delta$ Accuracy | Speed     | Speed‑up |
+|:-----:|:----------:|:------:|:----------:|:-----------------:|:---------:|:--------:|
+| 01    | L05        | 27     | 84.00%     | -0.21 pp          | 0.845 it/s| +3.5%    |
+| 02    | L08        | 26     | 83.85%     | -0.35 pp          | 0.853 it/s| +4.4%    |
+| 03    | L09        | 25     | 83.84%     | -0.36 pp          | 0.897 it/s| +9.8%    |
+| 04    | L23        | 24     | 83.76%     | -0.44 pp          | 0.941 it/s| +15.3%   |
+| 05    | L04        | 23     | 83.87%     | -0.34 pp          | 0.956 it/s| +17.1%   |
+| 06    | L18        | 22     | 83.86%     | -0.34 pp          | 1.045 it/s| +28.0%   |
+| 07    | L15        | 21     | 83.56%     | -0.64 pp          | 1.073 it/s| +31.4%   |
+| 08    | L13        | 20     | 83.82%     | -0.39 pp          | 1.122 it/s| +37.4%   |
+| 09    | L25        | 19     | 83.85%     | -0.36 pp          | 1.172 it/s| +43.5%   |
+
 
 ## 🏋️训练
-> 训练集为私有数据集，方法通用修改指令对格式即可
+> 训练集为私有数据集，本项目的输出数据格式为 JSON 格式，但方法通用
 
 **Loss 图如下所示：**
 
-<center>
-<img width="650" alt="hard weighted CE loss curve" src="https://github.com/user-attachments/assets/bbe25e93-4be6-4f09-b64d-12ccbb7f1814">
-<br>
-<b>(a) CE Loss</b>
-<br><br>
+<p align="center">
+  <img width="520" alt="hard weighted CE loss curve" src="https://github.com/user-attachments/assets/bbe25e93-4be6-4f09-b64d-12ccbb7f1814">
+  <br>
+  <b>(a) CE Loss</b>
+</p>
 
-<img width="650" alt="soft weighted KL loss curve" src="https://github.com/user-attachments/assets/6c05d76f-7b5d-4cf7-8a30-54662e0988f6">
-<br>
-<b>(b) KL Loss</b>
-</center>
+<p align="center">
+  <img width="520" alt="soft weighted KL loss curve" src="https://github.com/user-attachments/assets/6c05d76f-7b5d-4cf7-8a30-54662e0988f6">
+  <br>
+  <b>(b) KL Loss</b>
+</p>
 
 
 **损失函数:**
@@ -61,8 +79,7 @@ temperature: 1.0
 ```
 
 ## 🚕运行方式
-
-以下命令在项目根目录 `/home/alex/soulgard/soulgard-vl` 执行。当前源码位于 `highway/Scalpel`，内部包名为 `highway`；如果没有安装包，可先建立临时别名：
+注意文件相对路径
 
 ```bash
 export SCALPEL_ALIAS="$(mktemp -d)"
@@ -90,7 +107,7 @@ python -m highway.prune_prepare \
 python -m highway \
   --project-root /home/alex/soulgard/soulgard-vl \
   --python "$(which python)" \
-  --eval-script /home/alex/soulgard/soulgard-vl/sft_scripts/eval_universal_json.py \
+  --eval-script /path/to/eval_universal_json.py \
   --reference-model /path/to/reference_model \
   --train-data /path/to/train.json \
   --val-data /path/to/val.json \
@@ -176,7 +193,7 @@ python -m highway.train_weighted_kd \
 python -m compileall -q highway/Scalpel
 
 tmpdir="$(mktemp -d)"
-ln -s /home/alex/soulgard/soulgard-vl/highway/Scalpel "$tmpdir/highway"
+ln -s ../Scalpel "$tmpdir/highway"
 PYTHONPATH="$tmpdir:/home/alex/soulgard/soulgard-vl" \
 python -m unittest discover -s "$tmpdir/highway/tests" -v
 unlink "$tmpdir/highway"
