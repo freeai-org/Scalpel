@@ -1,23 +1,27 @@
 # Scalpel：Recovery-Aware Layer Pruning for Faster Vision-Language Models
+<div align="center">
+<img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/TsDLjZIblTgMjdDkJ0feU.png" alt="FelineBench benchmark visualization" width="420"/>
+</div>
+
 
 Scalpel 是 Highway-VL 的逐层结构化剪枝工具。它的恢复目标只有一个：
 
-> 删除 Student 的当前第 \(i\) 层后，只训练 Student 的第 \(i-1\) 层，使 Student 的边界输出模拟 Teacher 原第 \(i\) 层的输出。
+> 删除 Student 的当前第 $i$ 层后，只训练 Student 的第 $i-1$ 层，使 Student 的边界输出模拟 Teacher 原第 $i$ 层的输出。
 
-这里的“第 \(i\) 层”都是当前模型的 **0-based language-decoder layer index**。一轮剪枝严格对应一份删层前的 Teacher 和一份删层后的 Student。
+这里的“第 $i$ 层”都是当前模型的 **0-based language-decoder layer index**。一轮剪枝严格对应一份删层前的 Teacher 和一份删层后的 Student。
 
 ## 方法概览
 
 每一轮按照下面顺序执行：
 
 1. 用固定的 10×10 probe 集评估当前模型，临时绕过每个候选层。
-2. 用最坏轴风险选择一个待删除的当前层 \(i\)。
-3. 从当前模型物理删除第 \(i\) 层，得到 Student；删除后层号重新连续编号。
+2. 用最坏轴风险选择一个待删除的当前层 $i$。
+3. 从当前模型物理删除第 $i$ 层，得到 Student；删除后层号重新连续编号。
 4. 保留删层前模型作为冻结 Teacher，保留删层后的模型作为 Student。
 5. 冻结 Student 的所有参数，只解冻 language-model.layers[i-1]。
 6. 在同一批输入上比较：
-   - Teacher 原第 \(i\) 层输出 \(h_i^T\)；
-   - Student 第 \(i-1\) 层输出 \(h_{i-1}^S\)。
+   - Teacher 原第 $i$ 层输出 $h_i^T$；
+   - Student 第 $i-1$ 层输出 $h_{i-1}^S$。
 7. 对两侧隐藏态使用同一个冻结的 Teacher final norm 和 LM head，得到边界软分布，最小化 field-weighted boundary KL。
 8. 导出恢复后的 Student，作为下一轮的当前模型。
 
@@ -25,57 +29,56 @@ Scalpel 是 Highway-VL 的逐层结构化剪枝工具。它的恢复目标只有
 
 ## 边界目标与 loss
 
-设本轮删除当前层 \(i\)：
+设本轮删除当前层 $i$：
 
-\[
+$$
 h_i^T = F_i^T(h_{i-1}^T),\qquad
 h_{i-1}^S = F_{i-1}^S(h_{i-2}^S).
-\]
+$$
 
-训练只改变 \(F_{i-1}^S\) 的参数。恢复目标是让 \(h_{i-1}^S\) 经过同一个冻结 logit lens 后，模拟 Teacher 的 \(h_i^T\)：
+训练只改变 $F_{i-1}^S$ 的参数。恢复目标是让 $h_{i-1}^S$ 经过同一个冻结 logit lens 后，模拟 Teacher 的 $h_i^T$：
 
-\[
+$$
 q_i^T =
-\operatorname{softmax}\left(
-\frac{W\,\operatorname{Norm}(h_i^T)}{T}
+\mathrm{softmax}\left(
+\frac{W\,\mathrm{Norm}(h_i^T)}{T}
 \right),\qquad
 q_{i-1}^S =
-\operatorname{softmax}\left(
-\frac{W\,\operatorname{Norm}(h_{i-1}^S)}{T}
+\mathrm{softmax}\left(
+\frac{W\,\mathrm{Norm}(h_{i-1}^S)}{T}
 \right).
-\]
+$$
 
 代码中的总 loss 只有一项：
 
-\[
+$$
 \mathcal L_{\mathrm{boundary}}
- =
- \frac{1}{B}\sum_{b=1}^{B}
+ =\frac{1}{B}\sum_{b=1}^{B}
  \frac{\sum_t w_{b,t}\,
- \operatorname{KL}\!\left(q^T_{b,t}\Vert q^S_{b,t}\right)}
+ \mathrm{KL}\!\left(q^T_{b,t}\Vert q^S_{b,t}\right)}
  {\max(\sum_t w_{b,t},1)}.
-\]
+$$
 
 实现细节：
 
 - 只保留 assistant response 的 token；prompt、图像占位符和 padding 不参与恢复 loss。
-- \(w_{b,t}\) 使用 utils/field_weights.py 的字段权重：默认字段 1.0、cats_visible 2.0、动作/身体/耳朵/尾巴/脸/毛发 3.0、JSON 格式字符 0.5。
-- 温度默认为 \(T=1\)，KL 内部乘回 \(T^2\) 保持蒸馏梯度尺度。
+- $w_{b,t}$ 使用 utils/field_weights.py 的字段权重：默认字段 1.0、cats_visible 2.0、动作/身体/耳朵/尾巴/脸/毛发 3.0、JSON 格式字符 0.5。
+- 温度默认为 $T=1$，KL 内部乘回 $T^2$ 保持蒸馏梯度尺度。
 - 每个样本先按自身有效 token 权重归一化，再对 batch 求平均，避免长回答支配短回答。
 - 训练日志记录 loss 和 boundary_weighted_kl；两者在当前实现中相同。
 - 当前恢复训练没有 hard-label CE、最终层 CE、隐藏态 cosine loss，也没有 LoRA adapter。
 
 ## 层号和 Teacher/Student 对齐
 
-假设删层前 Teacher 有 \(N\) 层：
+假设删层前 Teacher 有 $N$ 层：
 
 | 对象 | 层数 | 边界层 |
 | --- | ---: | --- |
-| 本轮 Teacher（删层前当前模型） | \(N\) | 原第 \(i\) 层 \(h_i^T\) |
-| 本轮 Student（物理删除第 \(i\) 层） | \(N-1\) | 第 \(i-1\) 层 \(h_{i-1}^S\) |
+| 本轮 Teacher（删层前当前模型） | $N$ | 原第 $i$ 层 $h_i^T$ |
+| 本轮 Student（物理删除第 $i$ 层） | $N-1$ | 第 $i-1$ 层 $h_{i-1}^S$ |
 | 唯一可训练参数 | — | Student language_model.layers[i-1] |
 
-deleted-layer i 传入的是 Teacher/删层前模型的当前层号。因为第 \(i\) 层已经删除，Student 中第 \(i-1\) 层仍然保留，正是唯一解冻的层。第 0 层不能删除后恢复，因为没有 \(i-1\)；当前探测默认从第 3 层开始。
+deleted-layer i 传入的是 Teacher/删层前模型的当前层号。因为第 $i$ 层已经删除，Student 中第 $i-1$ 层仍然保留，正是唯一解冻的层。第 0 层不能删除后恢复，因为没有 $i-1$；当前探测默认从第 3 层开始。
 
 代码会验证 Teacher 和 Student 的层数必须相差 1，并把训练范围写入 resolved_config.json：
 
@@ -175,7 +178,7 @@ prune_layer.py 只负责结构化删除和保存，不负责恢复训练。
 | prune_prepare.py | 固定 probe 划分、数据指纹和本轮恢复协议 |
 | prune_probe.py | 对候选层做临时绕过 probe，按最坏轴风险选层 |
 | prune_layer.py | 物理删除一个 language decoder layer，更新层数、attention cache index 和原始层映射 |
-| train_weighted_kd.py | 边界恢复训练；冻结 Teacher，只解冻 Student 的 \(i-1\) 层 |
+| train_weighted_kd.py | 边界恢复训练；冻结 Teacher，只解冻 Student 的 $i-1$ 层 |
 | prune_highway.py | 可恢复的多轮 orchestrator；连接 probe、删层、边界训练和评估 |
 | train_summarize.py | 汇总 loss.jsonl，只认 boundary_weighted_kl |
 | utils/model_ops.py | Qwen3-VL 层访问、视觉输入缓存、边界 hook、物理删层和冻结/解冻 |
