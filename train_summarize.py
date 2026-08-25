@@ -1,4 +1,4 @@
-"""Summarize an append-only weighted-KD training log without modifying it."""
+"""Summarize an append-only boundary-recovery training log."""
 
 from __future__ import annotations
 
@@ -13,13 +13,7 @@ from typing import Any
 from .utils.io_utils import write_json
 
 
-LOSS_FIELDS = (
-    "loss",
-    "hard_weighted_ce",
-    "soft_weighted_kl",
-    "grad_norm",
-    "learning_rate",
-)
+COMPONENT_FIELDS = ("boundary_weighted_kl",)
 
 
 def read_loss_rows(path: Path) -> list[dict[str, Any]]:
@@ -86,10 +80,16 @@ def linear_slope(xs: list[float], ys: list[float]) -> float:
 def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Build global and first/last-window statistics from loss records."""
 
+    loss_fields = (
+        "loss",
+        *COMPONENT_FIELDS,
+        "grad_norm",
+        "learning_rate",
+    )
     loss_rows = [
         row
         for row in rows
-        if "epoch" in row and all(field in row for field in LOSS_FIELDS)
+        if "epoch" in row and all(field in row for field in loss_fields)
     ]
     if not loss_rows:
         raise ValueError("No complete loss-component records found")
@@ -101,7 +101,7 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     fields: dict[str, dict[str, float | None]] = {}
     nonfinite: dict[str, int] = {}
-    for field in LOSS_FIELDS:
+    for field in loss_fields:
         values = [float(row[field]) for row in unique_rows]
         nonfinite[field] = sum(not math.isfinite(value) for value in values)
         finite_pairs = [
@@ -148,8 +148,7 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     decomposition_errors = [
         abs(
             float(row["loss"])
-            - float(row["hard_weighted_ce"])
-            - float(row["soft_weighted_kl"])
+            - sum(float(row[field]) for field in COMPONENT_FIELDS)
         )
         for row in unique_rows
     ]
@@ -168,6 +167,7 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "last_epoch": float(unique_rows[-1]["epoch"]),
         "window_definition": "first and last ceil(10%) unique step records",
         "window_records": window_size,
+        "loss_components": list(COMPONENT_FIELDS),
         "fields": fields,
         "nonfinite_counts": nonfinite,
         "max_loss_decomposition_abs_error": (

@@ -1,17 +1,20 @@
-"""Field-weighted response distillation for a physically pruned Qwen3-VL."""
+"""Local boundary recovery for a physically pruned Qwen3-VL.
+
+After deleting current layer ``i``, only student layer ``i-1`` is trainable.
+The frozen model before deletion is the teacher. Recovery projects teacher
+boundary ``h_i`` and student boundary ``h_{i-1}`` through the same frozen final
+norm and LM head, then minimizes field-weighted ``KL(q_i || q_{i-1})``.
+"""
 
 from __future__ import annotations
 
 import argparse
 import gc
-import json
 import math
-import shutil
 from pathlib import Path
 from typing import Any
 
 import torch
-from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForImageTextToText,
     AutoProcessor,
@@ -19,28 +22,42 @@ from transformers import (
     TrainingArguments,
 )
 
-try:
-    from sft_scripts.stage1_stage2_train_weighted_json_sft import WeightedSFTDataset
-except ModuleNotFoundError:
-    from sft_scripts.stage2_train_weighted_json_sft import WeightedSFTDataset
-from sft_scripts.utils.qwen3vl_train_utils import LossJsonlCallback
 from sft_scripts.utils.sft_io import load_training_samples
 
-from .utils.field_weights import weight_config
-from .utils.io_utils import write_json
-from .utils.metrics import field_weighted_kd_loss
-from .utils.model_ops import enable_generation_cache
 from .train_summarize import read_loss_rows, summarize_rows
+from .utils.field_weights import weight_config
+from .utils.io_utils import load_layer_state, write_json
+from .utils.metrics import field_weighted_boundary_kl
+from .utils.model_ops import (
+    boundary_hidden,
+    boundary_logits,
+    configure_previous_layer_trainable,
+    get_layers,
+    prepare_language_inputs,
+    save_pruned_model,
+)
+from .utils.recovery_config import RECOVERY_METHOD
+from .utils.sft_dataset import WeightedSFTDataset
+from .utils.training_log import LossJsonlCallback
 from .utils.training_collator import DynamicKDCollator
 
 
-class WeightedKDTrainer(Trainer):
-    """Trainer with field-weighted hard CE plus teacher KL at the same tokens."""
+class BoundaryKDTrainer(Trainer):
+    """Train only student ``i-1`` to reproduce teacher boundary ``i``."""
 
-    def __init__(self, *args: Any, teacher_model: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        teacher_model: Any,
+        deleted_current_layer: int,
+        temperature: float,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.teacher_model = teacher_model
-        self._component_sums = {"hard_weighted_ce": 0.0, "soft_weighted_kl": 0.0}
+        self.deleted_current_layer = deleted_current_layer
+        self.temperature = temperature
+        self._component_sum = 0.0
         self._component_count = 0
 
     def compute_loss(
@@ -67,39 +84,48 @@ class WeightedKDTrainer(Trainer):
             device=shift_labels.device,
             dtype=torch.long,
         )
-        # ``no_grad`` tensors may safely participate as constants in the student
-        # backward graph.  ``inference_mode`` tensors cannot be saved by autograd.
+
+        # Embedding and vision modules are frozen and identical on both sides.
+        # Cache them once, then run only to the two aligned boundary positions.
+        language_inputs = prepare_language_inputs(model, inputs)
         with torch.no_grad():
-            teacher_outputs = self.teacher_model(
-                **inputs,
-                logits_to_keep=keep_positions,
+            teacher_hidden = boundary_hidden(
+                self.teacher_model,
+                language_inputs,
+                self.deleted_current_layer,
             )
-        student_outputs = model(
-            **inputs,
-            logits_to_keep=keep_positions,
+            teacher_logits = boundary_logits(
+                self.teacher_model,
+                teacher_hidden,
+                keep_positions,
+            )
+        student_hidden = boundary_hidden(
+            model,
+            language_inputs,
+            self.deleted_current_layer - 1,
         )
-        teacher_logits = teacher_outputs.logits.float()
-        student_logits = student_outputs.logits.float()
+        # Use the teacher's frozen norm and LM head as one shared logit lens.
+        student_logits = boundary_logits(
+            self.teacher_model,
+            student_hidden,
+            keep_positions,
+        )
         target_labels = shift_labels[:, keep_positions].to(student_logits.device)
         target_weights = shift_weights[:, keep_positions].to(
             student_logits.device,
             torch.float32,
         )
-        losses = field_weighted_kd_loss(
+        losses = field_weighted_boundary_kl(
             student_logits,
             teacher_logits,
             target_labels,
             target_weights,
+            temperature=self.temperature,
         )
-        self._component_sums["hard_weighted_ce"] += float(
-            losses.hard_ce.detach().item()
-        )
-        self._component_sums["soft_weighted_kl"] += float(
-            losses.soft_kl.detach().item()
-        )
+        self._component_sum += float(losses.boundary_kl.detach().item())
         self._component_count += 1
         return (
-            (losses.total, student_outputs)
+            (losses.total, {"boundary_hidden": student_hidden})
             if return_outputs
             else losses.total
         )
@@ -108,15 +134,11 @@ class WeightedKDTrainer(Trainer):
         if self._component_count:
             logs = {
                 **logs,
-                **{
-                    name: value / self._component_count
-                    for name, value in self._component_sums.items()
-                },
+                "boundary_weighted_kl": (
+                    self._component_sum / self._component_count
+                ),
             }
-            self._component_sums = {
-                "hard_weighted_ce": 0.0,
-                "soft_weighted_kl": 0.0,
-            }
+            self._component_sum = 0.0
             self._component_count = 0
         super().log(logs, *args, **kwargs)
 
@@ -144,44 +166,55 @@ def load_teacher(path: Path, attention: str, device: torch.device) -> Any:
     return teacher
 
 
-def load_student_with_lora(
+def load_student_for_boundary_recovery(
     path: Path,
     attention: str,
     device: torch.device,
-    rank: int,
-    alpha: int,
-    dropout: float,
-) -> Any:
+    deleted_current_layer: int,
+) -> tuple[Any, list[int], int]:
     student = AutoModelForImageTextToText.from_pretrained(
         path,
         **model_kwargs(attention),
     )
     student.config.use_cache = False
-    student.gradient_checkpointing_enable()
-    student = get_peft_model(
+    trainable_layers, trainable_parameters = configure_previous_layer_trainable(
         student,
-        LoraConfig(
-            r=rank,
-            lora_alpha=alpha,
-            lora_dropout=dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules="all-linear",
-        ),
+        deleted_current_layer,
     )
-    student.enable_input_require_grads()
     student.to(device)
-    student.print_trainable_parameters()
-    return student
+    print(
+        "trainable layers: "
+        f"{trainable_layers} || trainable params: {trainable_parameters:,}"
+    )
+    return student, trainable_layers, trainable_parameters
+
+
+def validate_boundary_alignment(
+    teacher: Any,
+    student: Any,
+    deleted_current_layer: int,
+) -> None:
+    teacher_layers = len(get_layers(teacher))
+    student_layers = len(get_layers(student))
+    if teacher_layers != student_layers + 1:
+        raise ValueError(
+            "Boundary recovery requires teacher and student to differ by exactly "
+            f"one layer; got teacher={teacher_layers}, student={student_layers}"
+        )
+    if not 1 <= deleted_current_layer < teacher_layers:
+        raise ValueError(
+            "--deleted-layer must be in [1, teacher_layers-1]; "
+            f"got {deleted_current_layer} for {teacher_layers} layers"
+        )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--teacher-model", type=Path, required=True)
     parser.add_argument("--student-model", type=Path, required=True)
+    parser.add_argument("--deleted-layer", type=int, required=True)
     parser.add_argument("--train-data", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--adapter-dir", type=Path, required=True)
     parser.add_argument("--export-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--max-length", type=int, default=2560)
@@ -189,9 +222,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--lora-rank", type=int, default=8)
-    parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--logging-steps", type=int, default=5)
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--max-samples", type=int, default=0)
@@ -209,6 +240,11 @@ def main() -> int:
     device = torch.device(args.device)
     if args.batch_size < 1 or args.grad_accum < 1:
         raise ValueError("--batch-size and --grad-accum must be positive")
+    if args.temperature <= 0:
+        raise ValueError("--temperature must be positive")
+    if args.deleted_layer < 1:
+        raise ValueError("--deleted-layer must be at least 1")
+
     samples = load_training_samples(
         args.train_data,
         args.max_samples or None,
@@ -231,12 +267,29 @@ def main() -> int:
     if int((probe["labels"] != -100).sum().item()) < 1:
         raise ValueError("First training sample has no supervised tokens")
 
+    teacher = load_teacher(args.teacher_model, args.attention, device)
+    student, trainable_layers, trainable_parameters = (
+        load_student_for_boundary_recovery(
+            args.student_model,
+            args.attention,
+            device,
+            args.deleted_layer,
+        )
+    )
+    validate_boundary_alignment(teacher, student, args.deleted_layer)
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    args.adapter_dir.mkdir(parents=True, exist_ok=True)
     loss_log_path = args.output_dir / "loss.jsonl"
     resolved = {
+        "recovery_method": RECOVERY_METHOD,
         "teacher_model": str(args.teacher_model.resolve()),
         "student_model": str(args.student_model.resolve()),
+        "deleted_current_layer": args.deleted_layer,
+        "teacher_boundary_layer": args.deleted_layer,
+        "student_boundary_layer": args.deleted_layer - 1,
+        "trainable_layers": trainable_layers,
+        "trainable_parameters": trainable_parameters,
+        "train_scope": "student_language_layer_i_minus_1_only",
         "train_data": str(args.train_data.resolve()),
         "train_samples": len(samples),
         "epochs": args.epochs,
@@ -247,11 +300,9 @@ def main() -> int:
         "grad_accum": args.grad_accum,
         "effective_batch_size": args.batch_size * args.grad_accum,
         "learning_rate": args.learning_rate,
-        "lora_rank": args.lora_rank,
-        "lora_alpha": args.lora_alpha,
-        "lora_dropout": args.lora_dropout,
-        "loss": "field_weighted_ce + field_weighted_KL(teacher||student)",
-        "temperature": 1.0,
+        "loss": "field_weighted_KL(q_teacher_i||q_student_i_minus_1)",
+        "temperature": args.temperature,
+        "logit_lens": "shared_frozen_teacher_final_norm_and_lm_head",
         "field_weights": weight_config(),
         "logging_steps": args.logging_steps,
         "save_steps": args.save_steps,
@@ -259,15 +310,6 @@ def main() -> int:
     }
     write_json(args.output_dir / "resolved_config.json", resolved)
 
-    teacher = load_teacher(args.teacher_model, args.attention, device)
-    student = load_student_with_lora(
-        args.student_model,
-        args.attention,
-        device,
-        args.lora_rank,
-        args.lora_alpha,
-        args.lora_dropout,
-    )
     pad_token_id = getattr(processor.tokenizer, "pad_token_id", None)
     if pad_token_id is None:
         pad_token_id = getattr(processor.tokenizer, "eos_token_id", 0)
@@ -294,15 +336,17 @@ def main() -> int:
         report_to="none",
         remove_unused_columns=False,
         dataloader_num_workers=0,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         optim="adamw_torch",
         max_grad_norm=1.0,
         seed=args.seed,
         data_seed=args.seed,
     )
-    trainer = WeightedKDTrainer(
+    trainer = BoundaryKDTrainer(
         model=student,
         teacher_model=teacher,
+        deleted_current_layer=args.deleted_layer,
+        temperature=args.temperature,
         args=training_args,
         train_dataset=dataset,
         data_collator=collator,
@@ -324,8 +368,6 @@ def main() -> int:
         args.output_dir / "loss_summary.json",
         summarize_rows(read_loss_rows(loss_log_path)),
     )
-    trainer.model.save_pretrained(args.adapter_dir)
-    processor.save_pretrained(args.adapter_dir)
     trainer.save_state()
     write_json(
         args.output_dir / "summary.json",
@@ -334,30 +376,36 @@ def main() -> int:
             "steps_per_epoch": steps_per_epoch,
             "train_metrics": train_result.metrics,
             "loss_log": str(loss_log_path),
-            "adapter_dir": str(args.adapter_dir),
             "export_dir": None if args.skip_export else str(args.export_dir),
         },
     )
     if args.skip_export:
-        print("Training smoke test complete; merged export skipped.")
+        print("Boundary recovery smoke test complete; model export skipped.")
         return 0
 
+    if args.export_dir.exists():
+        raise FileExistsError(f"Output model already exists: {args.export_dir}")
+    state = load_layer_state(args.student_model, len(get_layers(student)))
+    recovery_record = {
+        "method": RECOVERY_METHOD,
+        "teacher_model": str(args.teacher_model.resolve()),
+        "deleted_current_layer": args.deleted_layer,
+        "teacher_boundary_layer": args.deleted_layer,
+        "student_boundary_layer": args.deleted_layer - 1,
+        "trainable_layers": trainable_layers,
+        "loss": resolved["loss"],
+    }
+    state = {
+        **state,
+        "recoveries": [*state.get("recoveries", []), recovery_record],
+        "last_recovery": recovery_record,
+    }
     del teacher
     gc.collect()
-    torch.cuda.empty_cache()
-    merged_model = trainer.model.merge_and_unload()
-    enable_generation_cache(merged_model)
-    args.export_dir.mkdir(parents=True, exist_ok=False)
-    merged_model.save_pretrained(
-        args.export_dir,
-        safe_serialization=True,
-        max_shard_size="1GB",
-    )
-    processor.save_pretrained(args.export_dir)
-    state_path = args.student_model / "highway_state.json"
-    if state_path.exists():
-        shutil.copy2(state_path, args.export_dir / "highway_state.json")
-    print(f"Recovery model saved: {args.export_dir}")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    save_pruned_model(student, processor, args.export_dir, state)
+    print(f"Boundary-recovered model saved: {args.export_dir}")
     return 0
 
 

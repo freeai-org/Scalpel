@@ -183,8 +183,10 @@ def boundary_hidden(
         raise IndexError(f"layer_index={layer_index} 超出 [0, {len(layers) - 1}]")
     captured: dict[str, torch.Tensor] = {}
 
-    def stop_hook(module: nn.Module, args: tuple[Any, ...], output: torch.Tensor) -> None:
-        captured["hidden"] = output
+    def stop_hook(module: nn.Module, args: tuple[Any, ...], output: Any) -> None:
+        # Qwen decoder implementations normally return a tensor, but some
+        # Transformers versions wrap it in a one-element tuple.
+        captured["hidden"] = output[0] if isinstance(output, tuple) else output
         raise _StopAtLayer
 
     handle = layers[layer_index].register_forward_hook(stop_hook)
@@ -311,23 +313,18 @@ def physical_delete_layer(
     return deleted_original_id, new_ids
 
 
-def configure_trainable_layers(
+def configure_previous_layer_trainable(
     model: Qwen3VLForConditionalGeneration,
     deleted_current_index: int,
-    train_mode: str,
 ) -> tuple[list[int], int]:
-    """冻结整模，只放开删除边界之前的一层或整个前缀。"""
+    """冻结整模，只放开删除边界之前的 ``i-1`` 层。"""
 
     if deleted_current_index < 1:
         raise ValueError("删除第 0 层后没有 i-1 层可用于补偿")
     for parameter in model.parameters():
         parameter.requires_grad = False
 
-    train_indices = (
-        [deleted_current_index - 1]
-        if train_mode == "previous"
-        else list(range(deleted_current_index))
-    )
+    train_indices = [deleted_current_index - 1]
     layers = get_layers(model)
     for index in train_indices:
         for parameter in layers[index].parameters():

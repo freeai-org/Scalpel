@@ -13,14 +13,14 @@ from highway.utils.io_utils import load_layer_state, normalize_path, write_csv
 from highway.utils.metrics import (
     compare_logits,
     distribution_kl,
-    field_weighted_kd_loss,
+    field_weighted_boundary_kl,
     normalized_jensen_shannon,
 )
 from highway.utils.task_metrics import hard_regret, pruning_risk, summarize_predictions
 from highway.utils.training_collator import DynamicKDCollator
 from highway.utils.model_ops import (
     bypass_layer,
-    configure_trainable_layers,
+    configure_previous_layer_trainable,
     enable_generation_cache,
     get_layers,
     physical_delete_layer,
@@ -126,19 +126,17 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(model.config.text_config.use_cache)
         self.assertTrue(model.generation_config.use_cache)
 
-    def test_previous_and_prefix_trainable_modes(self) -> None:
+    def test_only_previous_layer_is_trainable(self) -> None:
         previous = DummyModel(4)
-        indices, count = configure_trainable_layers(previous, 2, "previous")
+        indices, count = configure_previous_layer_trainable(previous, 2)
         self.assertEqual(indices, [1])
         self.assertGreater(count, 0)
         self.assertFalse(any(p.requires_grad for p in get_layers(previous)[0].parameters()))
         self.assertTrue(all(p.requires_grad for p in get_layers(previous)[1].parameters()))
-
-        prefix = DummyModel(4)
-        indices, _ = configure_trainable_layers(prefix, 2, "prefix")
-        self.assertEqual(indices, [0, 1])
-        self.assertTrue(all(p.requires_grad for p in get_layers(prefix)[0].parameters()))
-        self.assertFalse(any(p.requires_grad for p in get_layers(prefix)[2].parameters()))
+        self.assertFalse(any(p.requires_grad for p in get_layers(previous)[2].parameters()))
+        self.assertFalse(any(p.requires_grad for p in get_layers(previous)[3].parameters()))
+        with self.assertRaises(ValueError):
+            configure_previous_layer_trainable(DummyModel(4), 0)
 
     def test_probability_metrics(self) -> None:
         reference = torch.tensor([[[3.0, 1.0], [0.5, 2.5]]])
@@ -161,20 +159,16 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(pruning_risk(0.0, 0.4), 0.4)
         self.assertEqual(pruning_risk(0.3, 0.0), 0.3)
 
-    def test_weighted_kd_has_zero_soft_loss_for_identical_distributions(self) -> None:
+    def test_boundary_kd_is_zero_for_identical_distributions(self) -> None:
         logits = torch.tensor([[[3.0, 1.0], [0.5, 2.5]]])
-        losses = field_weighted_kd_loss(
+        losses = field_weighted_boundary_kl(
             logits,
             logits,
             torch.tensor([[0, 1]]),
             torch.tensor([[1.0, 3.0]]),
         )
-        self.assertAlmostEqual(float(losses.soft_kl), 0.0, places=6)
-        self.assertAlmostEqual(
-            float(losses.total),
-            float(losses.hard_ce),
-            places=6,
-        )
+        self.assertAlmostEqual(float(losses.boundary_kl), 0.0, places=6)
+        self.assertAlmostEqual(float(losses.total), 0.0, places=6)
 
     def test_batched_weighted_kd_matches_mean_of_individual_samples(self) -> None:
         torch.manual_seed(7)
@@ -193,14 +187,14 @@ class CoreTests(unittest.TestCase):
             ]
         )
 
-        batched = field_weighted_kd_loss(
+        batched = field_weighted_boundary_kl(
             student,
             teacher,
             labels,
             weights,
         )
         individual = [
-            field_weighted_kd_loss(
+            field_weighted_boundary_kl(
                 student[index : index + 1],
                 teacher[index : index + 1],
                 labels[index : index + 1],
@@ -211,14 +205,8 @@ class CoreTests(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(
-                batched.hard_ce,
-                torch.stack([loss.hard_ce for loss in individual]).mean(),
-            )
-        )
-        self.assertTrue(
-            torch.allclose(
-                batched.soft_kl,
-                torch.stack([loss.soft_kl for loss in individual]).mean(),
+                batched.boundary_kl,
+                torch.stack([loss.boundary_kl for loss in individual]).mean(),
             )
         )
         self.assertTrue(

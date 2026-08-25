@@ -17,6 +17,7 @@ from sft_scripts.utils.sft_io import get_assistant_json, load_sft_samples
 
 from .utils.field_weights import weight_config
 from .utils.io_utils import write_json
+from .utils.recovery_config import RECOVERY_METHOD
 
 
 def sha256_file(path: Path) -> str:
@@ -91,7 +92,6 @@ def write_manifest(output_dir: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def environment_record() -> dict[str, Any]:
-    import peft
     import torch
     import transformers
 
@@ -111,7 +111,6 @@ def environment_record() -> dict[str, Any]:
         "python": sys.version,
         "torch": torch.__version__,
         "transformers": transformers.__version__,
-        "peft": peft.__version__,
         "cuda_available": torch.cuda.is_available(),
         "cuda_runtime": torch.version.cuda,
         "gpu": gpu_query.stdout.strip(),
@@ -184,7 +183,10 @@ def main() -> int:
             "probe_seed": args.seed,
             "ranking": "minimax(max(relative_hard_regret, normalized_js))",
             "field_weights": weight_config(),
-            "recovery_loss": "weighted_hard_ce + weighted_teacher_kl",
+            "recovery_method": RECOVERY_METHOD,
+            "recovery_teacher": "current_model_before_deletion",
+            "recovery_train_scope": "student_language_layer_i_minus_1_only",
+            "recovery_loss": "field_weighted_KL(q_teacher_i||q_student_i_minus_1)",
         },
     )
     environment = environment_record()

@@ -19,10 +19,11 @@ class LogitMetrics:
 
 
 @dataclass(slots=True)
-class WeightedKDLoss:
+class BoundaryKDLoss:
+    """Field-weighted KL at the deleted-layer boundary."""
+
     total: torch.Tensor
-    hard_ce: torch.Tensor
-    soft_kl: torch.Tensor
+    boundary_kl: torch.Tensor
 
 
 def distribution_kl(
@@ -121,13 +122,19 @@ def normalized_jensen_shannon(
     return (mean_js / math.log(2.0)).clamp(0.0, 1.0)
 
 
-def field_weighted_kd_loss(
+def field_weighted_boundary_kl(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     target_labels: torch.Tensor,
     target_weights: torch.Tensor,
-) -> WeightedKDLoss:
-    """Compute weighted hard CE plus ``KL(teacher || student)``."""
+    temperature: float = 1.0,
+) -> BoundaryKDLoss:
+    """Match teacher layer ``i`` with student layer ``i-1``.
+
+    ``teacher_logits`` and ``student_logits`` must come from the same frozen
+    logit lens (final norm plus LM head).  The labels are used only to mask
+    non-assistant positions; recovery has no hard-label CE term.
+    """
 
     if student_logits.shape != teacher_logits.shape:
         raise ValueError("Student and teacher logits must have the same shape")
@@ -135,6 +142,8 @@ def field_weighted_kd_loss(
         raise ValueError("target_labels must match the logits leading dimensions")
     if target_weights.shape != target_labels.shape:
         raise ValueError("target_weights must match target_labels")
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
 
     student_logits = student_logits.float()
     teacher_logits = teacher_logits.float()
@@ -146,28 +155,16 @@ def field_weighted_kd_loss(
     # preserves the batch-size-1 objective when several micro-batches are
     # combined into one dynamically padded micro-batch.
     denominator = effective_weights.sum(dim=-1).clamp_min(1.0)
-    vocab_size = student_logits.shape[-1]
-    hard_per_token = F.cross_entropy(
-        student_logits.reshape(-1, vocab_size),
-        target_labels.reshape(-1),
-        ignore_index=-100,
-        reduction="none",
-    ).view_as(target_labels)
-    hard_loss = (
-        (hard_per_token * effective_weights).sum(dim=-1) / denominator
-    ).mean()
-
-    teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-    student_log_probs = F.log_softmax(student_logits, dim=-1)
-    soft_per_token = torch.sum(
+    teacher_log_probs = F.log_softmax(teacher_logits / temperature, dim=-1)
+    student_log_probs = F.log_softmax(student_logits / temperature, dim=-1)
+    boundary_kl_per_token = torch.sum(
         teacher_log_probs.exp() * (teacher_log_probs - student_log_probs),
         dim=-1,
-    )
-    soft_loss = (
-        (soft_per_token * effective_weights).sum(dim=-1) / denominator
+    ) * temperature * temperature
+    boundary_kl = (
+        (boundary_kl_per_token * effective_weights).sum(dim=-1) / denominator
     ).mean()
-    return WeightedKDLoss(
-        total=hard_loss + soft_loss,
-        hard_ce=hard_loss,
-        soft_kl=soft_loss,
+    return BoundaryKDLoss(
+        total=boundary_kl,
+        boundary_kl=boundary_kl,
     )

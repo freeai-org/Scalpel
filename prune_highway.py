@@ -1,4 +1,4 @@
-"""Restartable multi-round task-aware pruning experiment orchestrator."""
+"""Restartable multi-round pruning with local boundary recovery."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .utils.io_utils import write_json
+from .utils.recovery_config import RECOVERY_METHOD
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -165,15 +166,33 @@ def quarantine_incomplete_model(path: Path) -> Path | None:
         suffix += 1
 
 
+def require_current_recovery_method(
+    summary: dict[str, Any],
+    source: Path,
+) -> dict[str, Any]:
+    method = summary.get("recovery_method")
+    if method != RECOVERY_METHOD:
+        raise RuntimeError(
+            f"{source} uses recovery_method={method!r}, but this code requires "
+            f"{RECOVERY_METHOD!r}. Use a new run-dir/model-root instead of "
+            "mixing global all-linear KD results with local boundary recovery."
+        )
+    return summary
+
+
 def ensure_recovery_training(
     *,
     args: argparse.Namespace,
     round_dir: Path,
+    teacher_model: Path,
     pre_model: Path,
     post_model: Path,
+    deleted_current_layer: int,
 ) -> dict[str, Any]:
     train_dir = round_dir / "train"
     summary_path = train_dir / "summary.json"
+    if summary_path.exists():
+        require_current_recovery_method(read_json(summary_path), summary_path)
     quarantine_incomplete_model(post_model)
     if not generated_model_ready(post_model):
         command = [
@@ -181,15 +200,15 @@ def ensure_recovery_training(
             "-m",
             "highway.train_weighted_kd",
             "--teacher-model",
-            str(args.reference_model),
+            str(teacher_model),
             "--student-model",
             str(pre_model),
+            "--deleted-layer",
+            str(deleted_current_layer),
             "--train-data",
             str(args.train_data),
             "--output-dir",
             str(train_dir),
-            "--adapter-dir",
-            str(train_dir / "adapter"),
             "--export-dir",
             str(post_model),
             "--epochs",
@@ -204,10 +223,8 @@ def ensure_recovery_training(
             str(args.recovery_effective_batch_size // args.recovery_batch_size),
             "--learning-rate",
             "1e-4",
-            "--lora-rank",
-            "8",
-            "--lora-alpha",
-            "32",
+            "--temperature",
+            "1.0",
             "--logging-steps",
             "5",
             "--save-steps",
@@ -227,11 +244,11 @@ def ensure_recovery_training(
         raise RuntimeError(f"Recovery model export is incomplete: {post_model}")
     if not summary_path.exists():
         raise FileNotFoundError(f"Recovery summary is missing: {summary_path}")
-    return read_json(summary_path)
+    return require_current_recovery_method(read_json(summary_path), summary_path)
 
 
 def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
-    marker = args.run_dir / "preflight" / "post_baseline_complete.json"
+    marker = args.run_dir / "preflight" / "post_baseline_boundary_complete.json"
     if marker.exists():
         return
     preflight_dir = args.run_dir / "preflight"
@@ -328,7 +345,7 @@ def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
 
     # Two optimizer steps are required: with a warmup scheduler, a one-step
     # smoke can execute its only optimizer step at learning rate zero.
-    kd_dir = preflight_dir / "kd_two_step"
+    kd_dir = preflight_dir / "boundary_kd_two_step"
     if not (kd_dir / "summary.json").exists():
         run_logged(
             [
@@ -339,14 +356,14 @@ def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
                 str(args.reference_model),
                 "--student-model",
                 str(smoke_model),
+                "--deleted-layer",
+                "12",
                 "--train-data",
                 str(args.train_data),
                 "--output-dir",
                 str(kd_dir),
-                "--adapter-dir",
-                str(kd_dir / "adapter"),
                 "--export-dir",
-                str(args.model_root / "preflight" / "unused_smoke_export"),
+                str(args.model_root / "preflight" / "unused_boundary_smoke_export"),
                 "--epochs",
                 "1",
                 "--max-samples",
@@ -376,6 +393,7 @@ def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
             "pruned_model": str(smoke_model),
             "pruned_eval": str(smoke_eval_dir / "metrics.json"),
             "kd_summary": str(kd_dir / "summary.json"),
+            "recovery_method": RECOVERY_METHOD,
         },
     )
 
@@ -556,6 +574,9 @@ def main() -> int:
             "recovery_batch_size": args.recovery_batch_size,
             "recovery_effective_batch_size": args.recovery_effective_batch_size,
             "recovery_epochs": args.recovery_epochs,
+            "recovery_method": RECOVERY_METHOD,
+            "recovery_train_scope": "student_language_layer_i_minus_1_only",
+            "recovery_loss": "field_weighted_boundary_kl",
             "retain_pre_models": args.retain_pre_models,
             "attention": args.attention,
             "post_baseline_preflight": args.post_baseline_preflight,
@@ -589,6 +610,12 @@ def main() -> int:
         round_summary_path = round_dir / "round_summary.json"
         if round_summary_path.exists() and generated_model_ready(post_model):
             summary = read_json(round_summary_path)
+            training = summary.get("training")
+            if not isinstance(training, dict):
+                raise RuntimeError(
+                    f"{round_summary_path} has no auditable training summary"
+                )
+            require_current_recovery_method(training, round_summary_path)
             if not args.retain_pre_models and pre_model.exists():
                 shutil.rmtree(pre_model)
             summaries.append(summary)
@@ -672,8 +699,10 @@ def main() -> int:
         train_summary = ensure_recovery_training(
             args=args,
             round_dir=round_dir,
+            teacher_model=current_model,
             pre_model=pre_model,
             post_model=post_model,
+            deleted_current_layer=selected_current_layer,
         )
         post_metrics, post_atomic = ensure_full_eval(
             python=args.python,
