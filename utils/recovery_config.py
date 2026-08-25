@@ -1,4 +1,3 @@
-"""Shared identifiers for the local boundary-recovery protocol."""
+"""Shared identifiers for the final-logit weighted-KD recovery protocol."""
 
-RECOVERY_METHOD = "previous_layer_boundary_kd_v1"
-
+RECOVERY_METHOD = "final_logits_lora_kd_v1"

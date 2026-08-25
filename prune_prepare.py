@@ -184,9 +184,9 @@ def main() -> int:
             "ranking": "minimax(max(relative_hard_regret, normalized_js))",
             "field_weights": weight_config(),
             "recovery_method": RECOVERY_METHOD,
-            "recovery_teacher": "current_model_before_deletion",
-            "recovery_train_scope": "student_language_layer_i_minus_1_only",
-            "recovery_loss": "field_weighted_KL(q_teacher_i||q_student_i_minus_1)",
+            "recovery_teacher": "fixed_reference_model",
+            "recovery_train_scope": "student_lora_all_linear",
+            "recovery_loss": "field_weighted_ce + field_weighted_KL(teacher_final||student_final)",
         },
     )
     environment = environment_record()

@@ -1,4 +1,4 @@
-"""Summarize an append-only boundary-recovery training log."""
+"""Summarize an append-only weighted-KD training log."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 from .utils.io_utils import write_json
 
 
-COMPONENT_FIELDS = ("boundary_weighted_kl",)
+COMPONENT_FIELDS = ("hard_weighted_ce", "soft_weighted_kl")
 
 
 def read_loss_rows(path: Path) -> list[dict[str, Any]]:

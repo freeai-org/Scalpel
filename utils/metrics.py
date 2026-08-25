@@ -19,11 +19,12 @@ class LogitMetrics:
 
 
 @dataclass(slots=True)
-class BoundaryKDLoss:
-    """Field-weighted KL at the deleted-layer boundary."""
+class WeightedKDLoss:
+    """最终 logits 上的字段加权 CE 与 teacher-student KL。"""
 
     total: torch.Tensor
-    boundary_kl: torch.Tensor
+    hard_ce: torch.Tensor
+    soft_kl: torch.Tensor
 
 
 def distribution_kl(
@@ -70,14 +71,6 @@ def compare_logits(
     )
 
 
-def normalized_hidden_loss(student: torch.Tensor, teacher: torch.Tensor) -> torch.Tensor:
-    """方向上的余弦距离，避免隐藏态绝对尺度主导辅助损失。"""
-
-    student = F.normalize(student.float(), dim=-1)
-    teacher = F.normalize(teacher.float(), dim=-1)
-    return (1.0 - (student * teacher).sum(dim=-1)).mean()
-
-
 def normalized_jensen_shannon(
     reference_logits: torch.Tensor,
     candidate_logits: torch.Tensor,
@@ -122,18 +115,18 @@ def normalized_jensen_shannon(
     return (mean_js / math.log(2.0)).clamp(0.0, 1.0)
 
 
-def field_weighted_boundary_kl(
+def field_weighted_kd_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     target_labels: torch.Tensor,
     target_weights: torch.Tensor,
     temperature: float = 1.0,
-) -> BoundaryKDLoss:
-    """Match teacher layer ``i`` with student layer ``i-1``.
+) -> WeightedKDLoss:
+    """计算最终 token 分布上的字段加权恢复目标。
 
-    ``teacher_logits`` and ``student_logits`` must come from the same frozen
-    logit lens (final norm plus LM head).  The labels are used only to mask
-    non-assistant positions; recovery has no hard-label CE term.
+    ``target_labels`` 里值为 ``-100`` 的位置会被忽略；其它位置同时计算
+    hard-label CE 和 ``KL(P_teacher || P_student)``。每条样本先按自己的
+    有效权重归一化，再对 batch 求平均，避免长回答压过短回答。
     """
 
     if student_logits.shape != teacher_logits.shape:
@@ -155,16 +148,24 @@ def field_weighted_boundary_kl(
     # preserves the batch-size-1 objective when several micro-batches are
     # combined into one dynamically padded micro-batch.
     denominator = effective_weights.sum(dim=-1).clamp_min(1.0)
+    vocab_size = student_logits.shape[-1]
+    hard_per_token = F.cross_entropy(
+        student_logits.reshape(-1, vocab_size),
+        target_labels.reshape(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view_as(target_labels)
+    hard_loss = ((hard_per_token * effective_weights).sum(dim=-1) / denominator).mean()
+
     teacher_log_probs = F.log_softmax(teacher_logits / temperature, dim=-1)
     student_log_probs = F.log_softmax(student_logits / temperature, dim=-1)
-    boundary_kl_per_token = torch.sum(
+    soft_per_token = torch.sum(
         teacher_log_probs.exp() * (teacher_log_probs - student_log_probs),
         dim=-1,
     ) * temperature * temperature
-    boundary_kl = (
-        (boundary_kl_per_token * effective_weights).sum(dim=-1) / denominator
-    ).mean()
-    return BoundaryKDLoss(
-        total=boundary_kl,
-        boundary_kl=boundary_kl,
+    soft_loss = ((soft_per_token * effective_weights).sum(dim=-1) / denominator).mean()
+    return WeightedKDLoss(
+        total=hard_loss + soft_loss,
+        hard_ce=hard_loss,
+        soft_kl=soft_loss,
     )

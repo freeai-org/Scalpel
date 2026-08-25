@@ -1,4 +1,4 @@
-"""Training log callback without importing the project's LoRA utilities."""
+"""Training log callback for weighted-KD recovery."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from transformers import TrainerCallback
 
 
 class LossJsonlCallback(TrainerCallback):
-    """Append numeric Trainer logs to JSONL for boundary-loss summaries."""
+    """Append numeric Trainer logs to JSONL for loss-component summaries."""
 
     def __init__(self, log_path: Path, reset: bool = True) -> None:
         self.log_path = log_path

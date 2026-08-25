@@ -1,4 +1,4 @@
-"""Restartable multi-round pruning with local boundary recovery."""
+"""Restartable multi-round pruning with final-logit weighted KD recovery."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def require_current_recovery_method(
         raise RuntimeError(
             f"{source} uses recovery_method={method!r}, but this code requires "
             f"{RECOVERY_METHOD!r}. Use a new run-dir/model-root instead of "
-            "mixing global all-linear KD results with local boundary recovery."
+            "mixing incompatible recovery protocols."
         )
     return summary
 
@@ -223,6 +223,12 @@ def ensure_recovery_training(
             str(args.recovery_effective_batch_size // args.recovery_batch_size),
             "--learning-rate",
             "1e-4",
+            "--lora-rank",
+            str(args.lora_rank),
+            "--lora-alpha",
+            str(args.lora_alpha),
+            "--lora-dropout",
+            str(args.lora_dropout),
             "--temperature",
             "1.0",
             "--logging-steps",
@@ -248,7 +254,7 @@ def ensure_recovery_training(
 
 
 def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
-    marker = args.run_dir / "preflight" / "post_baseline_boundary_complete.json"
+    marker = args.run_dir / "preflight" / "post_baseline_recovery_complete.json"
     if marker.exists():
         return
     preflight_dir = args.run_dir / "preflight"
@@ -345,7 +351,7 @@ def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
 
     # Two optimizer steps are required: with a warmup scheduler, a one-step
     # smoke can execute its only optimizer step at learning rate zero.
-    kd_dir = preflight_dir / "boundary_kd_two_step"
+    kd_dir = preflight_dir / "weighted_kd_two_step"
     if not (kd_dir / "summary.json").exists():
         run_logged(
             [
@@ -363,7 +369,7 @@ def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
                 "--output-dir",
                 str(kd_dir),
                 "--export-dir",
-                str(args.model_root / "preflight" / "unused_boundary_smoke_export"),
+                str(args.model_root / "preflight" / "unused_weighted_kd_smoke_export"),
                 "--epochs",
                 "1",
                 "--max-samples",
@@ -374,6 +380,12 @@ def ensure_post_baseline_preflight(args: argparse.Namespace) -> None:
                 "1",
                 "--grad-accum",
                 "1",
+                "--lora-rank",
+                str(args.lora_rank),
+                "--lora-alpha",
+                str(args.lora_alpha),
+                "--lora-dropout",
+                str(args.lora_dropout),
                 "--logging-steps",
                 "1",
                 "--save-steps",
@@ -526,6 +538,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recovery-batch-size", type=int, default=1)
     parser.add_argument("--recovery-effective-batch-size", type=int, default=16)
     parser.add_argument("--recovery-epochs", type=float, default=2.0)
+    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument(
         "--retain-pre-models",
         action=argparse.BooleanOptionalAction,
@@ -548,6 +563,10 @@ def main() -> int:
         raise ValueError("--recovery-batch-size must be positive")
     if args.recovery_epochs <= 0:
         raise ValueError("--recovery-epochs must be positive")
+    if args.lora_rank < 1 or args.lora_alpha < 1:
+        raise ValueError("--lora-rank and --lora-alpha must be positive")
+    if not 0.0 <= args.lora_dropout < 1.0:
+        raise ValueError("--lora-dropout must be in [0, 1)")
     if (
         args.recovery_effective_batch_size < args.recovery_batch_size
         or args.recovery_effective_batch_size % args.recovery_batch_size
@@ -574,9 +593,13 @@ def main() -> int:
             "recovery_batch_size": args.recovery_batch_size,
             "recovery_effective_batch_size": args.recovery_effective_batch_size,
             "recovery_epochs": args.recovery_epochs,
+            "lora_rank": args.lora_rank,
+            "lora_alpha": args.lora_alpha,
+            "lora_dropout": args.lora_dropout,
             "recovery_method": RECOVERY_METHOD,
-            "recovery_train_scope": "student_language_layer_i_minus_1_only",
-            "recovery_loss": "field_weighted_boundary_kl",
+            "recovery_teacher": "fixed_reference_model",
+            "recovery_train_scope": "student_lora_all_linear",
+            "recovery_loss": "field_weighted_ce + field_weighted_KL(teacher_final||student_final)",
             "retain_pre_models": args.retain_pre_models,
             "attention": args.attention,
             "post_baseline_preflight": args.post_baseline_preflight,
@@ -699,7 +722,7 @@ def main() -> int:
         train_summary = ensure_recovery_training(
             args=args,
             round_dir=round_dir,
-            teacher_model=current_model,
+            teacher_model=args.reference_model,
             pre_model=pre_model,
             post_model=post_model,
             deleted_current_layer=selected_current_layer,

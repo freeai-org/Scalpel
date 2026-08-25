@@ -1,8 +1,8 @@
-"""Field-aware token weights shared by probe and boundary recovery.
+"""Field-aware token weights shared by probe and final-logit recovery.
 
 The constants intentionally match the project's weighted JSON SFT recipe.  Keeping
 the implementation here avoids importing a command-line training script from the
-Highway package and gives the probe and boundary KL exactly the same weighting.
+Highway package and gives probe, CE, and teacher-student KL the same weighting.
 """
 
 from __future__ import annotations

@@ -44,10 +44,6 @@ class BypassDecoderLayer(nn.Module):
         return hidden_states
 
 
-class _StopAtLayer(RuntimeError):
-    """用 hook 提前终止前向，不浪费算力执行目标层之后的 block。"""
-
-
 def get_layers(model: Qwen3VLForConditionalGeneration) -> nn.ModuleList:
     return model.model.language_model.layers
 
@@ -167,52 +163,6 @@ def final_logits(
     return model.lm_head(selected_hidden)
 
 
-def boundary_hidden(
-    model: Qwen3VLForConditionalGeneration,
-    inputs: LanguageInputs,
-    layer_index: int,
-) -> torch.Tensor:
-    """取得某层输出并立刻中止 suffix forward。
-
-    默认候选从第 3 层开始，因此 hook 取得的输出不涉及前三层之后追加的
-    DeepStack 视觉残差；这也是 ``min_layer=3`` 的结构性原因。
-    """
-
-    layers = get_layers(model)
-    if not 0 <= layer_index < len(layers):
-        raise IndexError(f"layer_index={layer_index} 超出 [0, {len(layers) - 1}]")
-    captured: dict[str, torch.Tensor] = {}
-
-    def stop_hook(module: nn.Module, args: tuple[Any, ...], output: Any) -> None:
-        # Qwen decoder implementations normally return a tensor, but some
-        # Transformers versions wrap it in a one-element tuple.
-        captured["hidden"] = output[0] if isinstance(output, tuple) else output
-        raise _StopAtLayer
-
-    handle = layers[layer_index].register_forward_hook(stop_hook)
-    try:
-        model.model.language_model(**inputs.as_kwargs())
-    except _StopAtLayer:
-        pass
-    finally:
-        handle.remove()
-    if "hidden" not in captured:
-        raise RuntimeError(f"未能捕获第 {layer_index} 层输出")
-    return captured["hidden"]
-
-
-def boundary_logits(
-    model: Qwen3VLForConditionalGeneration,
-    hidden: torch.Tensor,
-    positions: torch.Tensor,
-) -> torch.Tensor:
-    """用共享 final norm + LM head 把中间隐藏态变成可比较的软分布。"""
-
-    selected = hidden[:, positions, :]
-    normalized = model.model.language_model.norm(selected)
-    return model.lm_head(normalized)
-
-
 @contextmanager
 def bypass_layer(
     model: Qwen3VLForConditionalGeneration,
@@ -311,26 +261,6 @@ def physical_delete_layer(
         model.config.num_hidden_layers = new_count
     new_ids = original_layer_ids[:layer_index] + original_layer_ids[layer_index + 1 :]
     return deleted_original_id, new_ids
-
-
-def configure_previous_layer_trainable(
-    model: Qwen3VLForConditionalGeneration,
-    deleted_current_index: int,
-) -> tuple[list[int], int]:
-    """冻结整模，只放开删除边界之前的 ``i-1`` 层。"""
-
-    if deleted_current_index < 1:
-        raise ValueError("删除第 0 层后没有 i-1 层可用于补偿")
-    for parameter in model.parameters():
-        parameter.requires_grad = False
-
-    train_indices = [deleted_current_index - 1]
-    layers = get_layers(model)
-    for index in train_indices:
-        for parameter in layers[index].parameters():
-            parameter.requires_grad = True
-    trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
-    return train_indices, trainable
 
 
 def save_pruned_model(

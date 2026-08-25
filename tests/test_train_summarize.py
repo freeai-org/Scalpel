@@ -9,10 +9,10 @@ from highway.train_summarize import summarize_rows
 class TrainSummarizeTest(unittest.TestCase):
     def test_summary_uses_latest_replayed_step(self) -> None:
         rows = [
-            self.row(5, 0.8, 0.8),
-            self.row(10, 0.7, 0.7),
-            self.row(10, 0.6, 0.6),
-            self.row(15, 0.5, 0.5),
+            self.row(5, 0.8, 0.5, 0.3),
+            self.row(10, 0.7, 0.5, 0.2),
+            self.row(10, 0.6, 0.4, 0.2),
+            self.row(15, 0.5, 0.35, 0.15),
         ]
 
         summary = summarize_rows(rows)
@@ -22,7 +22,10 @@ class TrainSummarizeTest(unittest.TestCase):
         self.assertEqual(summary["duplicate_steps"], [10])
         self.assertEqual(summary["last_step"], 15)
         self.assertAlmostEqual(summary["fields"]["loss"]["mean"], 0.6333333333)
-        self.assertEqual(summary["loss_components"], ["boundary_weighted_kl"])
+        self.assertEqual(
+            summary["loss_components"],
+            ["hard_weighted_ce", "soft_weighted_kl"],
+        )
         self.assertAlmostEqual(
             summary["max_loss_decomposition_abs_error"],
             0.0,
@@ -30,8 +33,8 @@ class TrainSummarizeTest(unittest.TestCase):
 
     def test_nonfinite_values_are_counted(self) -> None:
         rows = [
-            self.row(5, 0.8, 0.8),
-            self.row(10, math.nan, math.nan),
+            self.row(5, 0.8, 0.5, 0.3),
+            self.row(10, math.nan, math.nan, math.nan),
         ]
 
         summary = summarize_rows(rows)
@@ -41,7 +44,7 @@ class TrainSummarizeTest(unittest.TestCase):
 
     def test_final_runtime_record_without_loss_is_skipped(self) -> None:
         rows = [
-            self.row(5, 0.8, 0.8),
+            self.row(5, 0.8, 0.5, 0.3),
             {
                 "step": 5,
                 "epoch": 1.0,
@@ -59,12 +62,18 @@ class TrainSummarizeTest(unittest.TestCase):
         self.assertEqual(summary["fields"]["loss"]["last"], 0.8)
 
     @staticmethod
-    def row(step: int, loss: float, boundary: float) -> dict[str, float]:
+    def row(
+        step: int,
+        loss: float,
+        hard_ce: float,
+        soft_kl: float,
+    ) -> dict[str, float]:
         return {
             "step": step,
             "epoch": step / 100.0,
             "loss": loss,
-            "boundary_weighted_kl": boundary,
+            "hard_weighted_ce": hard_ce,
+            "soft_weighted_kl": soft_kl,
             "grad_norm": 0.3,
             "learning_rate": 1e-4,
         }

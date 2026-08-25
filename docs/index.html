@@ -125,7 +125,7 @@
             <div>
               <div class="eyebrow"><span></span> THE METHOD</div>
               <h2>每一刀，都先测再愈合。</h2>
-              <p>每轮以删层前的当前模型作为冻结 teacher；student 改变后，安全层也必须重新定位。</p>
+              <p>每轮重新定位可删层；恢复时固定 reference teacher，只让删层后的 student 贴近最终输出分布。</p>
             </div>
           </div>
 
@@ -151,8 +151,8 @@
             <article class="process-card reveal" data-delay="180">
               <span class="process-number">04</span><span class="process-icon orange">K</span>
               <h3>Recover</h3>
-              <p>冻结本轮 teacher 与 student 其余参数，只训练删除边界前一层，完成局部恢复。</p>
-              <small>LOCAL BOUNDARY KD</small>
+              <p>冻结 reference teacher，在 student 上训练 all-linear LoRA，再合并为下一轮完整模型。</p>
+              <small>FINAL-LOGIT KD</small>
             </article>
           </div>
 
@@ -239,24 +239,24 @@
           <div class="section-heading reveal">
             <div class="section-index">03</div>
             <div>
-              <div class="eyebrow"><span></span> LOCAL BOUNDARY RECOVERY</div>
-              <h2>只修复切口附近的一层。</h2>
-              <p>Teacher 是本轮删层前的模型；Student 仅解冻第 i−1 层，其余参数全部保持冻结。</p>
+              <div class="eyebrow"><span></span> FINAL-LOGIT RECOVERY</div>
+              <h2>用固定 teacher 稳住最终输出。</h2>
+              <p>Teacher 是固定 reference 模型；Student 通过 all-linear LoRA 同时学习 GT 字段和 teacher 分布。</p>
             </div>
           </div>
 
           <div class="loss-grid">
             <div class="loss-equation-card reveal">
-              <span class="mini-label">BOUNDARY ALIGNMENT</span>
+              <span class="mini-label">OUTPUT ALIGNMENT</span>
               <div class="main-equation boundary-equation">
-                <span>q</span><sub>i</sub><sup>T</sup><b>≈</b><span>q</span><sub>i−1</sub><sup>S</sup>
+                <span>p</span><sup>T</sup><b>≈</b><span>p</span><sup>S</sup>
               </div>
               <div class="equation-detail">
-                <div><strong>Teacher · i</strong><p>从本轮删层前模型读取被删除层的边界输出，并保持冻结。</p></div>
-                <div><strong>Student · i−1</strong><p>只更新切口前一层，使其软分布逼近 teacher 边界。</p></div>
+                <div><strong>Teacher final logits</strong><p>固定 reference 模型完整前向，提供稳定软标签。</p></div>
+                <div><strong>Student final logits</strong><p>删层后的模型挂 all-linear LoRA，训练后 merge 导出。</p></div>
               </div>
               <div class="normalization-note">
-                <code>ℒboundary = weighted KL(qᵀᵢ ∥ qˢᵢ₋₁)</code>
+                <code>ℒ = CEw(y, pˢ) + KLw(pᵀ ∥ pˢ)</code>
                 <span>每条样本先按有效 token 权重归一化，再对 batch 求平均。</span>
               </div>
             </div>
@@ -304,11 +304,11 @@
           </div>
 
           <div class="recovery-strip reveal">
-            <div><span>ROUND TEACHER</span><strong>Current N-layer model</strong><small>frozen · before deletion</small></div>
+            <div><span>FIXED TEACHER</span><strong>Reference model</strong><small>frozen · final logits</small></div>
             <div class="strip-arrow">→</div>
-            <div><span>ONLY TRAINABLE</span><strong>Student layer i−1</strong><small>local boundary repair</small></div>
+            <div><span>TRAINABLE</span><strong>Student LoRA</strong><small>all-linear adapter</small></div>
             <div class="strip-arrow">→</div>
-            <div><span>NEXT ROUND</span><strong>Recovered N−1 model</strong><small>all other parameters frozen</small></div>
+            <div><span>NEXT ROUND</span><strong>Merged N−1 model</strong><small>post-recovery student</small></div>
           </div>
         </div>
       </section>
@@ -358,7 +358,7 @@
 
           <div class="boundary-card reveal">
             <div>
-              <span class="mini-label">CAPABILITY BOUNDARY</span>
+              <span class="mini-label">SCOPE CHECK</span>
               <h3>视觉业务能力稳定，不等于通用知识能力无损。</h3>
               <p>Recovery 数据针对猫姿态 JSON 任务。MMLU / C-Eval 显示，持续删层仍会显著损伤通用纯文本选择题能力。</p>
             </div>
@@ -410,8 +410,12 @@
   --run-dir "$RUN_DIR" \
   --model-root "$MODEL_ROOT" \
   --rounds 9 \
+  --recovery-batch-size 4 \
   --recovery-effective-batch-size 16 \
-  --recovery-epochs 2</code></pre>
+  --recovery-epochs 2 \
+  --lora-rank 8 \
+  --lora-alpha 32 \
+  --lora-dropout 0.05</code></pre>
             </article>
           </div>
 
@@ -422,7 +426,7 @@
             <i>→</i>
             <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>DELETE</span><strong>prune_layer.py</strong><small>physical layer removal</small></a>
             <i>→</i>
-            <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>RECOVER</span><strong>train_weighted_kd.py</strong><small>local boundary KD</small></a>
+            <a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer"><span>RECOVER</span><strong>train_weighted_kd.py</strong><small>CE + final-logit KD</small></a>
           </div>
         </div>
       </section>
@@ -435,7 +439,7 @@
             <img class="brand-mark" src="assets/scalpel-logo.png" alt="" />
             <span>SCALPEL<span class="brand-dot">.</span></span>
           </a>
-          <p>Recovery-aware local boundary pruning for VLMs.</p>
+          <p>Recovery-aware layer pruning for VLMs.</p>
         </div>
         <div><span>PROJECT</span><a href="#method">Method</a><a href="#results">Results</a><a href="#reproduce">Reproduce</a></div>
         <div><span>RESOURCES</span><a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/freeai-org/Scalpel" target="_blank" rel="noreferrer">Documentation</a></div>

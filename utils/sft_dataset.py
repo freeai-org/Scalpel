@@ -1,4 +1,4 @@
-"""Dependency-light weighted multimodal dataset for boundary recovery."""
+"""Dependency-light weighted multimodal dataset for final-logit KD recovery."""
 
 from __future__ import annotations
 

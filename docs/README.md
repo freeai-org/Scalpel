@@ -8,7 +8,7 @@
 
 ```bash
 cd /home/alex/soulgard/soulgard-vl
-python -m http.server 8000 --directory docs
+python -m http.server 8000 --directory highway/Scalpel/docs
 ```
 
 浏览器打开：
@@ -25,9 +25,9 @@ GitHub Pages 部署：
 4. Branch 选择 `main`，目录选择 `/docs`，点击 `Save`。
 5. 页面将发布到 `https://soulgard.github.io/soulgard-vl/`。
 
-页面是纯 HTML/CSS/JavaScript，不需要 npm 构建。`assets/` 中的方法 SVG 和 Loss 图
-来自 Highway 的真实实验结果；逐轮图表与表格数据内嵌在 `app.js` 中，因此在项目页、
-用户页或本地静态服务器下都能工作。
+页面是纯 HTML/CSS/JavaScript，不需要 npm 构建。当前页面说明的是最终 logits
+CE+KL 恢复协议；`assets/` 中的方法图和 Loss 图来自 Highway 的实验结果。
+逐轮图表与表格数据内嵌在 `app.js` 中，因此在项目页、用户页或本地静态服务器下都能工作。
 
 ## Contents
 
