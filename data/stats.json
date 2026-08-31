@@ -1,0 +1,146 @@
+{
+  "webinstructsub_qa": {
+    "samples": 91138,
+    "tokens": 22054550,
+    "seen": 91151,
+    "invalid": 0,
+    "duplicate": 1,
+    "overlength": 12
+  },
+  "ultrachat_200k_sft": {
+    "samples": 14670,
+    "tokens": 13650845,
+    "seen": 18974,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 4304
+  },
+  "tulu_3_sft_mixture": {
+    "samples": 81249,
+    "tokens": 24733237,
+    "seen": 82145,
+    "invalid": 0,
+    "duplicate": 1,
+    "overlength": 895
+  },
+  "medical_o1_qa_en": {
+    "samples": 19703,
+    "tokens": 4030014,
+    "seen": 19703,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 0
+  },
+  "agieval_dev": {
+    "samples": 77,
+    "tokens": 31640,
+    "seen": 86,
+    "invalid": 9,
+    "duplicate": 0,
+    "overlength": 0
+  },
+  "legal_qa_v1": {
+    "samples": 1846,
+    "tokens": 500635,
+    "seen": 1847,
+    "invalid": 0,
+    "duplicate": 1,
+    "overlength": 0
+  },
+  "coig_cqia_full": {
+    "samples": 7138,
+    "tokens": 6400596,
+    "seen": 10074,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 2936
+  },
+  "firefly_train_1m": {
+    "samples": 27723,
+    "tokens": 5000018,
+    "seen": 27851,
+    "invalid": 0,
+    "duplicate": 2,
+    "overlength": 126
+  },
+  "belle_train_3m_cn": {
+    "samples": 15976,
+    "tokens": 4530021,
+    "seen": 15996,
+    "invalid": 7,
+    "duplicate": 0,
+    "overlength": 13
+  },
+  "medical_o1_qa_zh": {
+    "samples": 16551,
+    "tokens": 4000268,
+    "seen": 19295,
+    "invalid": 0,
+    "duplicate": 2744,
+    "overlength": 0
+  },
+  "ceval_dev_exam": {
+    "samples": 238,
+    "tokens": 50109,
+    "seen": 238,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 0
+  },
+  "cmmlu_dev_exam": {
+    "samples": 298,
+    "tokens": 20033,
+    "seen": 298,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 0
+  },
+  "openr1_math_220k": {
+    "samples": 813,
+    "tokens": 1000225,
+    "seen": 16682,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 15869
+  },
+  "numinamath_cot": {
+    "samples": 14027,
+    "tokens": 7000154,
+    "seen": 14127,
+    "invalid": 0,
+    "duplicate": 2,
+    "overlength": 98
+  },
+  "mmlu_auxiliary_train": {
+    "samples": 6883,
+    "tokens": 2000094,
+    "seen": 7260,
+    "invalid": 0,
+    "duplicate": 377,
+    "overlength": 0
+  },
+  "magicoder_oss_instruct_75k": {
+    "samples": 4742,
+    "tokens": 2250558,
+    "seen": 4743,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 1
+  },
+  "magicoder_evol_instruct_110k": {
+    "samples": 3671,
+    "tokens": 1750142,
+    "seen": 3773,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 102
+  },
+  "self_oss_instruct_exec_filter_50k": {
+    "samples": 3618,
+    "tokens": 1000290,
+    "seen": 3618,
+    "invalid": 0,
+    "duplicate": 0,
+    "overlength": 0
+  }
+}

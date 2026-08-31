@@ -14,6 +14,7 @@ from highway.utils.metrics import (
     compare_logits,
     distribution_kl,
     field_weighted_kd_loss,
+    memory_efficient_field_weighted_kd_loss,
     normalized_jensen_shannon,
 )
 from highway.utils.task_metrics import hard_regret, pruning_risk, summarize_predictions
@@ -210,6 +211,49 @@ class CoreTests(unittest.TestCase):
             )
         )
 
+    def test_chunked_weighted_kd_matches_reference_loss_and_gradient(self) -> None:
+        torch.manual_seed(17)
+        teacher = torch.randn(2, 7, 13)
+        labels = torch.tensor(
+            [
+                [1, 2, -100, 4, 5, 6, 7],
+                [8, -100, 3, 2, 1, -100, 0],
+            ]
+        )
+        weights = torch.rand(2, 7)
+        reference_student = torch.randn(2, 7, 13, requires_grad=True)
+        chunked_student = reference_student.detach().clone().requires_grad_(True)
+
+        reference = field_weighted_kd_loss(
+            reference_student,
+            teacher,
+            labels,
+            weights,
+            temperature=1.7,
+        )
+        chunked = memory_efficient_field_weighted_kd_loss(
+            chunked_student,
+            teacher,
+            labels,
+            weights,
+            temperature=1.7,
+            token_chunk_size=3,
+        )
+        reference.total.backward()
+        chunked.total.backward()
+
+        self.assertTrue(torch.allclose(chunked.hard_ce, reference.hard_ce, atol=1e-6))
+        self.assertTrue(torch.allclose(chunked.soft_kl, reference.soft_kl, atol=1e-6))
+        self.assertTrue(torch.allclose(chunked.total, reference.total, atol=1e-6))
+        self.assertTrue(
+            torch.allclose(
+                chunked_student.grad,
+                reference_student.grad,
+                atol=1e-6,
+                rtol=1e-5,
+            )
+        )
+
     def test_dynamic_kd_collator_pads_text_and_concatenates_images(self) -> None:
         collator = DynamicKDCollator(pad_token_id=99, max_length=8)
         features = [
@@ -218,6 +262,7 @@ class CoreTests(unittest.TestCase):
                 "attention_mask": torch.tensor([1, 1, 1]),
                 "labels": torch.tensor([-100, 2, 3]),
                 "loss_weights": torch.tensor([1.0, 2.0, 3.0]),
+                "group_id": torch.tensor(0),
                 "pixel_values": torch.ones(2, 4),
                 "image_grid_thw": torch.tensor([[1, 1, 2]]),
             },
@@ -226,6 +271,7 @@ class CoreTests(unittest.TestCase):
                 "attention_mask": torch.tensor([1, 1]),
                 "labels": torch.tensor([-100, 5]),
                 "loss_weights": torch.tensor([1.0, 2.0]),
+                "group_id": torch.tensor(1),
                 "pixel_values": torch.zeros(3, 4),
                 "image_grid_thw": torch.tensor([[1, 1, 3]]),
             },
@@ -236,8 +282,20 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(tuple(batch["input_ids"].shape), (2, 3))
         self.assertEqual(int(batch["input_ids"][1, 2]), 99)
         self.assertEqual(int(batch["labels"][1, 2]), -100)
+        self.assertEqual(batch["group_ids"].tolist(), [0, 1])
         self.assertEqual(tuple(batch["pixel_values"].shape), (5, 4))
         self.assertEqual(tuple(batch["image_grid_thw"].shape), (2, 3))
+
+    def test_dynamic_kd_collator_refuses_overlength_features(self) -> None:
+        collator = DynamicKDCollator(pad_token_id=0, max_length=3)
+        feature = {
+            "input_ids": torch.tensor([1, 2, 3, 4]),
+            "attention_mask": torch.ones(4, dtype=torch.long),
+            "labels": torch.tensor([-100, 2, 3, 4]),
+            "loss_weights": torch.ones(4),
+        }
+        with self.assertRaisesRegex(ValueError, "refuses to truncate"):
+            collator([feature])
 
     def test_task_macro_uses_atomic_fields_and_penalizes_missing_cat(self) -> None:
         ground_truth = {

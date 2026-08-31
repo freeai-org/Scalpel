@@ -10,9 +10,9 @@ from typing import Any, Iterator
 import torch
 
 from .field_weights import token_weights_from_offsets
+from .mixture_data import load_training_samples
 from sft_scripts.utils.sft_io import (
     get_conversation_text,
-    load_sft_samples,
     resolve_image_path,
 )
 
@@ -32,7 +32,7 @@ class HighwayDataset:
 
     def __init__(self, path: Path, processor: Any, max_length: int = 2048) -> None:
         self.path = path
-        self.samples = load_sft_samples(path)
+        self.samples, _ = load_training_samples(path)
         self.processor = processor
         self.max_length = max_length
 
@@ -42,17 +42,19 @@ class HighwayDataset:
     def __getitem__(self, index: int) -> PreparedSample:
         sample = self.samples[index]
         user_text, assistant_text = get_conversation_text(sample)
-        image_path = resolve_image_path(str(sample["image"]))
-        if not image_path.exists():
-            raise FileNotFoundError(f"图片不存在: {image_path}")
+        user_content: list[dict[str, str]] = []
+        image_value = str(sample.get("image") or "").strip()
+        if image_value:
+            image_path = resolve_image_path(image_value)
+            if not image_path.is_file():
+                raise FileNotFoundError(f"图片不存在: {image_path}")
+            user_content.append({"type": "image", "image": str(image_path)})
+        user_content.append({"type": "text", "text": user_text})
 
         prompt_messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": str(image_path)},
-                    {"type": "text", "text": user_text},
-                ],
+                "content": user_content,
             }
         ]
         full_messages = prompt_messages + [
@@ -117,7 +119,8 @@ class HighwayDataset:
         return [
             index
             for index, sample in enumerate(self.samples)
-            if resolve_image_path(str(sample.get("image", ""))).is_file()
+            if not str(sample.get("image") or "").strip()
+            or resolve_image_path(str(sample["image"])).is_file()
         ]
 
 

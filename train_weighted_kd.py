@@ -9,24 +9,31 @@ from __future__ import annotations
 
 import argparse
 import gc
+import json
 import math
 from pathlib import Path
 from typing import Any
 
 import torch
+from torch.utils.data import SequentialSampler
 from transformers import (
     AutoProcessor,
     Trainer,
     TrainingArguments,
 )
 
-from sft_scripts.utils.sft_io import load_training_samples
-
 from .train_summarize import read_loss_rows, summarize_rows
 from .utils.field_weights import weight_config
 from .utils.io_utils import load_layer_state, write_json
 from .utils.kd_runtime import attach_lora_to_student, freeze_teacher
-from .utils.metrics import field_weighted_kd_loss
+from .utils.metrics import memory_efficient_field_weighted_kd_loss
+from .utils.mixture_data import (
+    GROUP_ORDER,
+    MIXTURE_ORDER_GROUPED,
+    MIXTURE_ORDERS,
+    enforce_effective_batch_groups,
+    load_training_samples,
+)
 from .utils.model_ops import get_layers, save_pruned_model
 from .utils.recovery_config import RECOVERY_METHOD
 from .utils.sft_dataset import WeightedSFTDataset
@@ -42,16 +49,27 @@ class WeightedKDTrainer(Trainer):
         *args: Any,
         teacher_model: Any,
         temperature: float,
+        loss_token_chunk_size: int,
+        preserve_data_order: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.teacher_model = teacher_model
         self.temperature = temperature
+        self.loss_token_chunk_size = loss_token_chunk_size
+        self.preserve_data_order = preserve_data_order
         self._component_sums = {
             "hard_weighted_ce": 0.0,
             "soft_weighted_kl": 0.0,
         }
         self._component_count = 0
+        self._group_counts = {group: 0 for group in GROUP_ORDER}
+
+    def _get_train_sampler(self, train_dataset: Any = None) -> Any:
+        if self.preserve_data_order:
+            dataset = self.train_dataset if train_dataset is None else train_dataset
+            return SequentialSampler(dataset)
+        return super()._get_train_sampler(train_dataset)
 
     def compute_loss(
         self,
@@ -60,6 +78,7 @@ class WeightedKDTrainer(Trainer):
         return_outputs: bool = False,
         num_items_in_batch: Any = None,
     ) -> Any:
+        group_ids = inputs.pop("group_ids", None)
         loss_weights = inputs.pop("loss_weights")
         labels = inputs.pop("labels")
         shift_labels = labels[..., 1:].contiguous()
@@ -68,33 +87,37 @@ class WeightedKDTrainer(Trainer):
         if not bool(valid_mask.any()):
             raise ValueError("Training batch contains no supervised assistant tokens")
 
-        # 只保留第一个 assistant token 之后的位置，少算 prompt 的无效 logits。
-        first_valid = int(torch.nonzero(valid_mask, as_tuple=False)[:, 1].min().item())
-        keep_positions = torch.arange(
-            first_valid,
-            shift_labels.shape[-1],
-            device=shift_labels.device,
-            dtype=torch.long,
-        )
-        model_inputs = {**inputs, "use_cache": False}
+        # Qwen3-VL 原生支持只投影指定的 LM-head 位置。这里仅保留
+        # batch 内至少一条样本有 assistant label 的位置，避免为 prompt
+        # 和 padding 物化 [sequence, 152k vocab] 的巨大 logits。
+        keep_positions = torch.nonzero(
+            valid_mask.any(dim=0),
+            as_tuple=False,
+        ).flatten()
+        model_inputs = {
+            **inputs,
+            "use_cache": False,
+            "logits_to_keep": keep_positions,
+        }
 
         with torch.no_grad():
             teacher_outputs = self.teacher_model(**model_inputs)
         student_outputs = model(**model_inputs)
 
-        teacher_logits = teacher_outputs.logits[:, :-1, :][:, keep_positions].float()
-        student_logits = student_outputs.logits[:, :-1, :][:, keep_positions].float()
+        teacher_logits = teacher_outputs.logits
+        student_logits = student_outputs.logits
         target_labels = shift_labels[:, keep_positions].to(student_logits.device)
         target_weights = shift_weights[:, keep_positions].to(
             student_logits.device,
             torch.float32,
         )
-        losses = field_weighted_kd_loss(
+        losses = memory_efficient_field_weighted_kd_loss(
             student_logits,
             teacher_logits,
             target_labels,
             target_weights,
             temperature=self.temperature,
+            token_chunk_size=self.loss_token_chunk_size,
         )
         self._component_sums["hard_weighted_ce"] += float(
             losses.hard_ce.detach().item()
@@ -102,6 +125,10 @@ class WeightedKDTrainer(Trainer):
         self._component_sums["soft_weighted_kl"] += float(
             losses.soft_kl.detach().item()
         )
+        if group_ids is not None:
+            for group_id in group_ids.detach().reshape(-1).cpu().tolist():
+                if 0 <= int(group_id) < len(GROUP_ORDER):
+                    self._group_counts[GROUP_ORDER[int(group_id)]] += 1
         self._component_count += 1
         return (
             (losses.total, student_outputs)
@@ -111,15 +138,30 @@ class WeightedKDTrainer(Trainer):
 
     def log(self, logs: dict[str, float], *args: Any, **kwargs: Any) -> None:
         if self._component_count:
+            mixture_samples = sum(self._group_counts.values())
+            mixture_fields: dict[str, float | int] = {}
+            if mixture_samples:
+                mixture_fields = {
+                    "mixture_window_samples": mixture_samples,
+                    **{
+                        f"mixture_{group}_fraction": (
+                            self._group_counts[group] / mixture_samples
+                        )
+                        for group in GROUP_ORDER
+                    },
+                }
             logs = {
                 **logs,
                 **{
                     key: value / self._component_count
                     for key, value in self._component_sums.items()
                 },
+                **mixture_fields,
             }
             for key in self._component_sums:
                 self._component_sums[key] = 0.0
+            for group in self._group_counts:
+                self._group_counts[group] = 0
             self._component_count = 0
         super().log(logs, *args, **kwargs)
 
@@ -142,9 +184,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--loss-token-chunk-size", type=int, default=4)
     parser.add_argument("--logging-steps", type=int, default=5)
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--max-samples", type=int, default=0)
+    parser.add_argument("--train-parts", type=int, default=1)
+    parser.add_argument("--train-part-index", type=int, default=0)
+    parser.add_argument("--data-seed", type=int, default=20260828)
+    parser.add_argument(
+        "--mixture-order",
+        choices=MIXTURE_ORDERS,
+        default=MIXTURE_ORDER_GROUPED,
+    )
+    parser.add_argument(
+        "--preserve-data-order",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--drop-incomplete-effective-batch",
+        action="store_true",
+        help="Drop the final partial gradient-accumulation window.",
+    )
+    parser.add_argument(
+        "--require-effective-batch-groups",
+        nargs="*",
+        choices=GROUP_ORDER,
+        default=[],
+        help="Fail unless every effective batch contains all listed groups.",
+    )
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--attention", default="sdpa")
     parser.add_argument("--device", default="cuda")
@@ -159,12 +227,21 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--batch-size and --grad-accum must be positive")
     if args.temperature <= 0:
         raise ValueError("--temperature must be positive")
+    if args.loss_token_chunk_size < 1:
+        raise ValueError("--loss-token-chunk-size must be positive")
     if args.lora_rank < 1 or args.lora_alpha < 1:
         raise ValueError("--lora-rank and --lora-alpha must be positive")
     if not 0.0 <= args.lora_dropout < 1.0:
         raise ValueError("--lora-dropout must be in [0, 1)")
     if args.deleted_layer < 0:
         raise ValueError("--deleted-layer must be non-negative")
+    if args.train_parts < 1:
+        raise ValueError("--train-parts must be positive")
+    if (
+        args.train_part_index
+        and not 1 <= args.train_part_index <= args.train_parts
+    ):
+        raise ValueError("--train-part-index must be between 1 and --train-parts")
 
 
 def main() -> int:
@@ -172,10 +249,62 @@ def main() -> int:
     validate_args(args)
     device = torch.device(args.device)
 
-    samples = load_training_samples(
+    samples, mixture_stats = load_training_samples(
         args.train_data,
         args.max_samples or None,
+        part_index=args.train_part_index,
+        parts=args.train_parts,
+        seed=args.data_seed,
+        mixture_order=args.mixture_order,
     )
+    if (
+        mixture_stats is not None
+        and int(mixture_stats.get("max_token_estimate", 0)) > args.max_length
+    ):
+        raise ValueError(
+            "Training partition contains a complete QA sample above max_length: "
+            f"max_token_estimate={mixture_stats['max_token_estimate']}, "
+            f"max_length={args.max_length}. Rebuild the dataset instead of "
+            "truncating assistant content."
+        )
+    effective_batch_size = args.batch_size * args.grad_accum
+    effective_batch_audit = None
+    if args.require_effective_batch_groups:
+        if mixture_stats is None:
+            raise ValueError(
+                "--require-effective-batch-groups requires Parquet mixture data"
+            )
+        if not args.preserve_data_order:
+            raise ValueError(
+                "--require-effective-batch-groups requires --preserve-data-order"
+            )
+        samples, effective_batch_audit = enforce_effective_batch_groups(
+            samples,
+            effective_batch_size=effective_batch_size,
+            required_groups=args.require_effective_batch_groups,
+            drop_incomplete=args.drop_incomplete_effective_batch,
+        )
+    resolved_config_path = args.output_dir / "resolved_config.json"
+    if (
+        args.resume_from_checkpoint is not None
+        and mixture_stats is not None
+        and resolved_config_path.exists()
+    ):
+        with resolved_config_path.open("r", encoding="utf-8") as handle:
+            previous_config = json.load(handle)
+        previous_order = previous_config.get(
+            "mixture_order",
+            previous_config.get("mixture_stats", {}).get(
+                "sample_order",
+                MIXTURE_ORDER_GROUPED,
+            ),
+        )
+        if previous_order != args.mixture_order:
+            raise ValueError(
+                "Cannot resume with a different mixture order: "
+                f"checkpoint={previous_order!r}, requested={args.mixture_order!r}. "
+                "Start a fresh training directory instead."
+            )
     processor = AutoProcessor.from_pretrained(
         args.student_model,
         trust_remote_code=True,
@@ -184,11 +313,12 @@ def main() -> int:
     processor.tokenizer.padding_side = "right"
     processor.image_processor.max_pixels = args.image_max_pixels
     processor.image_processor.min_pixels = 3136
+    loss_mode = "uniform" if mixture_stats is not None else "weighted"
     dataset = WeightedSFTDataset(
         samples,
         processor,
         args.max_length,
-        "weighted",
+        loss_mode,
     )
     probe = dataset[0]
     if int((probe["labels"] != -100).sum().item()) < 1:
@@ -224,18 +354,46 @@ def main() -> int:
         "lora_target_modules": "all-linear",
         "train_data": str(args.train_data.resolve()),
         "train_samples": len(samples),
+        "train_parts": args.train_parts,
+        "train_part_index": args.train_part_index,
+        "data_seed": args.data_seed,
+        "mixture_order": (
+            args.mixture_order if mixture_stats is not None else None
+        ),
+        "preserve_data_order": args.preserve_data_order,
+        "mixture_stats": mixture_stats,
         "epochs": args.epochs,
         "max_steps": args.max_steps,
         "max_length": args.max_length,
+        "overlength_policy": "reject_complete_sample_never_truncate",
         "image_max_pixels": args.image_max_pixels,
         "batch_size": args.batch_size,
         "grad_accum": args.grad_accum,
         "effective_batch_size": args.batch_size * args.grad_accum,
+        "effective_batch_group_audit": effective_batch_audit,
         "learning_rate": args.learning_rate,
-        "loss": "field_weighted_ce + field_weighted_KL(teacher_final||student_final)",
+        "loss": (
+            "uniform_token_ce + uniform_token_KL(teacher_final||student_final)"
+            if loss_mode == "uniform"
+            else "field_weighted_ce + field_weighted_KL(teacher_final||student_final)"
+        ),
         "temperature": args.temperature,
-        "field_weights": weight_config(),
+        "loss_token_chunk_size": args.loss_token_chunk_size,
+        "token_weighting": loss_mode,
+        "field_weights": (
+            weight_config() if loss_mode == "weighted" else {"default": 1.0}
+        ),
         "logging_steps": args.logging_steps,
+        "loss_logging_window": {
+            "optimizer_steps": args.logging_steps,
+            "samples": (
+                args.logging_steps * args.batch_size * args.grad_accum
+            ),
+            "aggregation": "mean over the same mixed-sample window",
+            "group_fraction_fields": [
+                f"mixture_{group}_fraction" for group in GROUP_ORDER
+            ],
+        },
         "save_steps": args.save_steps,
         "seed": args.seed,
     }
@@ -277,6 +435,8 @@ def main() -> int:
         model=student,
         teacher_model=teacher,
         temperature=args.temperature,
+        loss_token_chunk_size=args.loss_token_chunk_size,
+        preserve_data_order=args.preserve_data_order,
         args=training_args,
         train_dataset=dataset,
         data_collator=collator,

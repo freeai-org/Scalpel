@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 from sft_scripts.utils.sft_io import get_conversation_text, resolve_image_path
 
 from .field_weights import token_weights_from_offsets
+from .mixture_data import GROUP_TO_ID
 
 
 class WeightedSFTDataset(Dataset):
@@ -33,17 +34,19 @@ class WeightedSFTDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         sample = self.samples[index]
         user_text, assistant_text = get_conversation_text(sample)
-        image_path = resolve_image_path(str(sample.get("image", "")))
-        if not image_path.exists():
-            raise FileNotFoundError(f"图片不存在: {image_path}")
+        user_content: list[dict[str, str]] = []
+        image_value = str(sample.get("image") or "").strip()
+        if image_value:
+            image_path = resolve_image_path(image_value)
+            if not image_path.is_file():
+                raise FileNotFoundError(f"图片不存在: {image_path}")
+            user_content.append({"type": "image", "image": str(image_path)})
+        user_content.append({"type": "text", "text": user_text})
 
         prompt_messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": str(image_path)},
-                    {"type": "text", "text": user_text},
-                ],
+                "content": user_content,
             }
         ]
         full_messages = prompt_messages + [
@@ -99,12 +102,15 @@ class WeightedSFTDataset(Dataset):
                 )
 
         if len(input_ids) > self.max_length:
-            input_ids = input_ids[: self.max_length]
-            attention_mask = attention_mask[: self.max_length]
-            labels = labels[: self.max_length]
-            loss_weights = loss_weights[: self.max_length]
-            if mm_token_type_ids is not None:
-                mm_token_type_ids = mm_token_type_ids[: self.max_length]
+            sample_id = sample.get("id", index)
+            source = sample.get("source", "unknown")
+            raise ValueError(
+                "Complete SFT sample exceeds max_length; refusing to truncate "
+                f"assistant content: id={sample_id!r}, source={source!r}, "
+                f"tokens={len(input_ids)}, max_length={self.max_length}. "
+                "Rebuild the QA mixture with the same tokenizer and "
+                "max_sequence_tokens."
+            )
 
         if (labels != -100).sum().item() == 0:
             labels[-1] = input_ids[-1]
@@ -114,6 +120,10 @@ class WeightedSFTDataset(Dataset):
             "attention_mask": attention_mask,
             "labels": labels,
             "loss_weights": loss_weights,
+            "group_id": torch.tensor(
+                GROUP_TO_ID.get(str(sample.get("group") or ""), -1),
+                dtype=torch.long,
+            ),
         }
         if "pixel_values" in full_inputs:
             item["pixel_values"] = full_inputs["pixel_values"]

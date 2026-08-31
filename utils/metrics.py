@@ -169,3 +169,149 @@ def field_weighted_kd_loss(
         hard_ce=hard_loss,
         soft_kl=soft_loss,
     )
+
+
+class _ChunkedWeightedKDLoss(torch.autograd.Function):
+    """Exact CE+KL with bounded temporary memory over the token dimension.
+
+    Qwen3-VL has a large vocabulary.  Materializing float32 teacher/student
+    probabilities for every supervised token at once can consume several GiB.
+    The forward and backward formulas are separable by token, so process small
+    token blocks while retaining only the native-dtype logits required for the
+    student gradient.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: torch.autograd.function.FunctionCtx,
+        student_logits: torch.Tensor,
+        teacher_logits: torch.Tensor,
+        target_labels: torch.Tensor,
+        target_weights: torch.Tensor,
+        temperature: float,
+        token_chunk_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size, token_count, vocab_size = student_logits.shape
+        valid_mask = target_labels != -100
+        effective_weights = target_weights.float() * valid_mask.float()
+        denominator = effective_weights.sum(dim=-1).clamp_min(1.0)
+        normalized_weights = effective_weights / denominator.unsqueeze(-1)
+        normalized_weights = normalized_weights / batch_size
+
+        hard_loss = torch.zeros((), device=student_logits.device, dtype=torch.float32)
+        soft_loss = torch.zeros_like(hard_loss)
+        for start in range(0, token_count, token_chunk_size):
+            stop = min(start + token_chunk_size, token_count)
+            student = student_logits[:, start:stop].float()
+            teacher = teacher_logits[:, start:stop].float()
+            labels = target_labels[:, start:stop]
+            weights = normalized_weights[:, start:stop]
+
+            hard_per_token = F.cross_entropy(
+                student.reshape(-1, vocab_size),
+                labels.reshape(-1),
+                ignore_index=-100,
+                reduction="none",
+            ).view_as(labels)
+            hard_loss.add_((hard_per_token * weights).sum())
+
+            teacher_log_probs = F.log_softmax(teacher / temperature, dim=-1)
+            student_log_probs = F.log_softmax(student / temperature, dim=-1)
+            soft_per_token = torch.sum(
+                teacher_log_probs.exp()
+                * (teacher_log_probs - student_log_probs),
+                dim=-1,
+            ) * temperature * temperature
+            soft_loss.add_((soft_per_token * weights).sum())
+
+        ctx.save_for_backward(
+            student_logits,
+            teacher_logits,
+            target_labels,
+            normalized_weights,
+        )
+        ctx.temperature = temperature
+        ctx.token_chunk_size = token_chunk_size
+        return hard_loss, soft_loss
+
+    @staticmethod
+    def backward(
+        ctx: torch.autograd.function.FunctionCtx,
+        grad_hard: torch.Tensor,
+        grad_soft: torch.Tensor,
+    ) -> tuple[torch.Tensor | None, ...]:
+        student_logits, teacher_logits, target_labels, normalized_weights = (
+            ctx.saved_tensors
+        )
+        temperature = ctx.temperature
+        token_chunk_size = ctx.token_chunk_size
+        token_count = student_logits.shape[1]
+        grad_student = torch.empty_like(student_logits)
+
+        for start in range(0, token_count, token_chunk_size):
+            stop = min(start + token_chunk_size, token_count)
+            student = student_logits[:, start:stop].float()
+            teacher = teacher_logits[:, start:stop].float()
+            labels = target_labels[:, start:stop]
+            weights = normalized_weights[:, start:stop].unsqueeze(-1)
+
+            student_probs = F.softmax(student / temperature, dim=-1)
+            hard_grad = F.softmax(student, dim=-1)
+            valid_mask = labels != -100
+            safe_labels = labels.masked_fill(~valid_mask, 0)
+            hard_grad.scatter_add_(
+                dim=-1,
+                index=safe_labels.unsqueeze(-1),
+                src=-valid_mask.to(hard_grad.dtype).unsqueeze(-1),
+            )
+            teacher_probs = F.softmax(teacher / temperature, dim=-1)
+            soft_grad = (student_probs - teacher_probs) * temperature
+            chunk_grad = weights * (
+                hard_grad * grad_hard.float()
+                + soft_grad * grad_soft.float()
+            )
+            grad_student[:, start:stop].copy_(chunk_grad)
+
+        return grad_student, None, None, None, None, None
+
+
+def memory_efficient_field_weighted_kd_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    target_labels: torch.Tensor,
+    target_weights: torch.Tensor,
+    temperature: float = 1.0,
+    token_chunk_size: int = 4,
+) -> WeightedKDLoss:
+    """Mathematically equivalent, token-chunked variant of the KD objective."""
+
+    if student_logits.ndim != 3:
+        raise ValueError("student_logits must have shape [batch, tokens, vocabulary]")
+    if student_logits.shape != teacher_logits.shape:
+        raise ValueError("Student and teacher logits must have the same shape")
+    if target_labels.shape != student_logits.shape[:-1]:
+        raise ValueError("target_labels must match the logits leading dimensions")
+    if target_weights.shape != target_labels.shape:
+        raise ValueError("target_weights must match target_labels")
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if token_chunk_size < 1:
+        raise ValueError("token_chunk_size must be positive")
+    if teacher_logits.requires_grad:
+        raise ValueError("teacher_logits must be detached")
+
+    target_labels = target_labels.to(student_logits.device)
+    target_weights = target_weights.to(student_logits.device, torch.float32)
+    hard_loss, soft_loss = _ChunkedWeightedKDLoss.apply(
+        student_logits,
+        teacher_logits,
+        target_labels,
+        target_weights,
+        float(temperature),
+        int(token_chunk_size),
+    )
+    return WeightedKDLoss(
+        total=hard_loss + soft_loss,
+        hard_ce=hard_loss,
+        soft_kl=soft_loss,
+    )

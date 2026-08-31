@@ -34,10 +34,13 @@ class DynamicKDCollator:
         self,
         features: list[dict[str, torch.Tensor]],
     ) -> dict[str, torch.Tensor]:
-        target_length = min(
-            max(int(feature["input_ids"].numel()) for feature in features),
-            self.max_length,
-        )
+        lengths = [int(feature["input_ids"].numel()) for feature in features]
+        if max(lengths) > self.max_length:
+            raise ValueError(
+                "DynamicKDCollator refuses to truncate complete QA samples: "
+                f"batch_lengths={lengths}, max_length={self.max_length}"
+            )
+        target_length = max(lengths)
         batch = {
             "input_ids": torch.stack(
                 [
@@ -76,6 +79,10 @@ class DynamicKDCollator:
                 ]
             ),
         }
+        if "group_id" in features[0]:
+            batch["group_ids"] = torch.stack(
+                [feature["group_id"] for feature in features]
+            )
         if "mm_token_type_ids" in features[0]:
             batch["mm_token_type_ids"] = torch.stack(
                 [

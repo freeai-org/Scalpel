@@ -40,10 +40,31 @@ Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只
 | 09    | L25        | 19     | 83.85%     | -0.36 pp          | 1.172 it/s| +43.5%   |
 
 
+$$\mathcal{L}_{\mathrm{Total}} = \mathcal{L}_{\mathrm{CE}} + \mathcal{L}_{\mathrm{KL}}$$
+
+
 ## 🏋️训练
 > 训练集为私有数据集，本项目的输出数据格式为 JSON 格式，但方法通用
 
+
 **Loss 图如下所示：**
+
+<p align="center">
+  <img width="520" alt="hard weighted CE loss curve" src="https://github.com/user-attachments/assets/bbe25e93-4be6-4f09-b64d-12ccbb7f1814">
+  <br>
+  <b>(a) CE Loss</b>
+</p>
+
+
+$$\mathcal{L}_{\mathrm{CE}} = \frac{1}{B}\sum_{b=1}^{B}\frac{\sum_{t} w_{b,t}\,\mathrm{CE}(z^{S}_{b,t}, y_{b,t})}{\max(\sum_{t} w_{b,t}, 1)}$$
+
+$$\mathcal{L}_{\mathrm{KL}} = \frac{1}{B}\sum_{b=1}^{B}\frac{\sum_{t} w_{b,t}\,\mathrm{KL}(P^{T}_{b,t} || P^{S}_{b,t})}{\max(\sum_{t} w_{b,t}, 1)}$$
+
+其中：
+
+$$P^{T}_{b,t} = \mathrm{softmax}(z^{T}_{b,t}/T), \quad P^{S}_{b,t} = \mathrm{softmax}(z^{S}_{b,t}/T)$$
+
+这里 `teacher_logits` 和 `student_logits` 都是完整 forward 后经过最终 LM head 得到的 logits。`labels == -100` 的 prompt、padding、图像占位符不参与 loss。
 
 <p align="center">
   <img width="520" alt="hard weighted CE loss curve" src="https://github.com/user-attachments/assets/bbe25e93-4be6-4f09-b64d-12ccbb7f1814">
@@ -145,7 +166,56 @@ python -m highway.train_weighted_kd \
 
 `--deleted-layer` 只用于审计记录，loss 不读取第 `i` 层或第 `i-1` 层 hidden state。
 
+<<<<<<< HEAD
 ## ✨输出结构
+=======
+### Scalpel 100M text mixture 实验
+
+`data/train/*.parquet` 使用 token 预算 `English 65% / Chinese 20% /
+Math 10% / Code 5%`。数据全部来自原生 instruction/response、question/answer、
+problem/solution 或 messages 对；不使用文本 continuation 伪造指令。完整 chat
+超过 1536 token 的样本在构建时整条排除，训练时禁止静默截断。新的 mixture
+流程不重写原 Parquet，而是在读取时
+构造可复现的虚拟 mixture：
+
+- 固定 seed 后在每个大类内打乱，然后按 estimated token 贪心均衡到
+  `t1 ... t10`。
+- 每个 `ti` 内使用确定性的按比例交错顺序；每一步选择“相对累计目标最
+  欠采样”的类别，使每个短窗口接近该分区的总体样本比例，同时每条样本
+  仍恰好读取一次。
+- `batch_size=1, grad_accum=16` 时，每 16 个样本构成一个有效 batch；
+  `logging_steps=20` 时，每条 loss 记录平均同一个 320 样本混合窗口。
+  日志同时写入 `mixture_window_samples` 和四个
+  `mixture_<group>_fraction` 字段，用于核对该 loss 对应的数据组成。
+- validation 每类固定抽 20 条，共 80 条；PPL 评估全部可监督 token。
+- 内部 `leaderboard_score` 定义为四个大类 teacher-forced token
+  accuracy 的 macro average 乘 100；它用于这次消融实验的可比较排名，不是
+  Open LLM Leaderboard 的对外分数。
+- 每轮删除一层，只在对应 `ti` 上恢复训练 1 epoch，累计 10 轮后
+  每条 train 样本恰好被使用一次。
+
+完整命令：
+
+```bash
+export PYTHONPATH="$PWD/highway:$PWD"
+python -m Scalpel.mixture_experiment \
+  --project-root "$PWD" \
+  --python "$(which python)" \
+  --reference-model "$PWD/B-RVPO/models/vl_local" \
+  --train-data "$PWD/highway/Scalpel/data/train" \
+  --val-data "$PWD/highway/Scalpel/data/validation" \
+  --run-dir "$PWD/highway/Scalpel/results/qwen3vl2b_mixture_interleaved_prune10_seed20260828" \
+  --model-root "$PWD/highway/Scalpel/results/qwen3vl2b_mixture_interleaved_prune10_seed20260828/models" \
+  --rounds 10 --train-parts 10 --data-seed 20260828 \
+  --test-samples-per-group 20 --max-length 1536
+```
+
+每轮会写入 `probe/layer_leaderboard.{csv,json}`、`train/loss.jsonl`、
+`eval_pre_recovery/metrics.json` 和 `eval_post_recovery/metrics.json`；最终汇总为
+`final/all_rounds.{csv,json}`。流程可重入，已完成的阶段不会重算。
+
+## 输出结构
+>>>>>>> 02706b2 (Scalpel-VL-Prune)
 
 每个 round 主要文件：
 
