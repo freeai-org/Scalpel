@@ -6,11 +6,19 @@ Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/TsDLjZIblTgMjdDkJ0feU.png" alt="FelineBench benchmark visualization" width="420"/>
 </div>
 
+**🦊业务剪枝 Scalpel-VL-1.6B-Animal 模型仓库：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B-Animal https://huggingface.co/freeai-org/Scalpel-VL-1.7B
+
 **🦊业务剪枝 Scalpel-VL-1.6B-Animal 模型仓库：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B-Animal
 
 **📗ScalpelBench：** 0.1B 大小的数据集，300k 条样本，覆盖英语、中文、数学、代码四大类别，目的是在剪枝的同时保留模型基座的能力，参考 https://huggingface.co/datasets/freeai-org/ScalpelBench
 
 **🔗Scalpel 完整介绍：** https://freeai-org.github.io/Scalpel
+
+<div align="center">
+<video controls width="550" src="https://github.com/user-attachments/assets/916c614d-f994-4e5a-9643-c29d82d355f5">
+</video>
+</div>
+
 
 ****
 
