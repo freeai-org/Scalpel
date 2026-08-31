@@ -14,12 +14,15 @@ Scalpel 能让你的模型缩小的同时，极大减少显存占用，并提高
 
 **🔗Scalpel 完整介绍：** https://freeai-org.github.io/Scalpel
 
-<div align="center">
-<video controls width="550" src="https://github.com/user-attachments/assets/916c614d-f994-4e5a-9643-c29d82d355f5">
-</video>
-</div>
+<p align="center">
+  <video
+    controls
+    width="420"
+    src="https://github.com/user-attachments/assets/a5cae22e-b475-4c22-963b-908a6cb70dfd">
+  </video>
+</p>
 
-- 剪枝训练后，在测试集上依然有较高的准确率和泛化能力
+- 基于 Qwen3-VL-2B 剪枝 7 层 Layer 后，吞吐量快29%，并且在测试集上依然有较高的准确率和泛化能力
 
 ****
 
