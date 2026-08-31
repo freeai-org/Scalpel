@@ -1,6 +1,6 @@
 # ✂️Scalpel: Recovery-Aware Layer Pruning for Vision-Language Models
 
-Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只真正删除一层，并在删除后做一次轻量恢复训练，让更小的 student 尽量保持原模型在目标任务上的输出分布和字段准确率。
+Scalpel 能让你的模型缩小 20%~50% ，极大减少显存占用，并提高模型推理速度 20~40% 左右。Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只真正删除一层，并在删除后做一次轻量恢复训练，让更小的 student 尽量保持原模型在目标任务上的输出分布和字段准确率。
 
 <div align="center">
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/TsDLjZIblTgMjdDkJ0feU.png" alt="FelineBench benchmark visualization" width="420"/>
