@@ -206,13 +206,13 @@ rmdir "$tmpdir"
 ## 📖Citation
 
 ```text
-@misc{wu2026soulgardvl2bvisionlanguagemodeledgebased,
-      title={SoulGard-VL-2B: A Vision-Language Model for Edge-Based Feline Behavior Understanding},
+@misc{wu2026catellectvl2bvisionlanguagemodeledgebased,
+      title={Catellect-VL-2B: A Vision-Language Model for Edge-Based Feline Behavior Understanding}, 
       author={YuHang Wu and HaoXian Liu and Jia Tao},
       year={2026},
       eprint={2608.22070},
       archivePrefix={arXiv},
       primaryClass={cs.CE},
-      url={https://arxiv.org/abs/2608.22070},
+      url={https://arxiv.org/abs/2608.22070}, 
 }
 ```
