@@ -6,7 +6,7 @@ Scalpel 能让你的模型缩小的同时，极大减少显存占用，并提高
 <img src="https://cdn-uploads.huggingface.co/production/uploads/66d295c4f87ed8c2bc246a2d/TsDLjZIblTgMjdDkJ0feU.png" alt="FelineBench benchmark visualization" width="420"/>
 </div>
 
-**🦜通用剪枝恢复训练 Scalpel-VL-1.7B 模型仓库：**  https://huggingface.co/freeai-org/Scalpel-VL-1.7B
+**🦜通用剪枝恢复训练 Scalpel-VL-1.8B 模型仓库：**  https://huggingface.co/freeai-org/Scalpel-VL-1.8B
 
 **🦊业务剪枝恢复训练 Scalpel-VL-1.6B-Animal 模型仓库：** https://huggingface.co/freeai-org/Scalpel-VL-1.6B-Animal
 
@@ -22,7 +22,7 @@ Scalpel 能让你的模型缩小的同时，极大减少显存占用，并提高
   </video>
 </p>
 
-- 基于 Qwen3-VL-2B 剪枝 7 层 Layer 后，吞吐量快29%，并且在测试集上依然有较高的准确率和泛化能力
+- 基于 Qwen3-VL-2B 剪枝 7 层 Layer 后恢复训练后得到 Scalpel-VL-1.8B，吞吐量快29%，并且在测试集上依然有较高的准确率和泛化能力
 
 ****
 
