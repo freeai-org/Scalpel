@@ -32,7 +32,7 @@ Scalpel 能让你的模型缩小的同时，极大减少显存占用，并提高
   </video>
 </div>
 
-- 基于 Qwen3-VL-2B 剪枝 7 层 Layer 后恢复训练后得到 Scalpel-VL-1.8B，吞吐量快29%，并且在测试集上依然有较高的准确率和泛化能力
+- (1) 基于 Qwen3-VL-2B 剪枝 7 层 Layer 后恢复训练后得到 Scalpel-VL-1.8B，吞吐量最快，并且在测试集上依然有较高的准确率和泛化能力；(2) InternLM2-1.8B其次，但依旧显著慢于 Scalpel-VL-1.8B；(3) Qwen3-VL-2B 最慢；
 
 ****
 
