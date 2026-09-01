@@ -17,8 +17,24 @@ Scalpel 能让你的模型缩小的同时，极大减少显存占用，并提高
 <p align="center">
   <video
     controls
-    width="420"
-    src="https://github.com/user-attachments/assets/a5cae22e-b475-4c22-963b-908a6cb70dfd">
+    width="340"
+    src="https://github.com/user-attachments/assets/576a2832-7629-46d5-a964-1d38afa1240c">
+  </video>
+</p>
+
+<p align="center">
+  <video
+    controls
+    width="340"
+    src="https://github.com/user-attachments/assets/404e1909-950b-4d98-b95d-8943dbe5b948">
+  </video>
+</p>
+
+<p align="center">
+  <video
+    controls
+    width="340"
+    src="https://github.com/user-attachments/assets/7eaeff6f-1206-4064-8891-cfbe5623d259">
   </video>
 </p>
 
