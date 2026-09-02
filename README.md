@@ -137,7 +137,17 @@ dataset = load_dataset("freeai-org/ScalpelBench")
 <img src="https://github.com/user-attachments/assets/46f9e025-0b85-4d04-9280-84945645cced" alt="FelineBench benchmark visualization" width="500"/>
 </div>
 
+### 评估效果如下
+MMLU是一个包含 4 则选项的数据集，如果我们在 MMLU 的验证集准确度超过 25%，则说明 Scalpel-VL-1.8B 是具备一定泛化能力的。具体来说，我们对 Scalpel-VL-1.8B、InternLM2-1.8B 进行了评估，并对比同级别参数的速度区别：
 
+| Model | Setting | STEM (%) ↑ | Humanities (%) ↑ | Social Sciences (%) ↑ | Other (%) ↑ | Speedup ↑ |
+|---|---|---:|---:|---:|---:|---:|
+| Scalpel-VL-1.8B | Zero-shot | 31.95 | 35.84 | 38.83 | 39.99 | **1.25×** |
+| InternLM2-1.8B | Zero-shot | **37.18** | **41.85** | **51.90** | **49.91** | 1.00× |
+| Scalpel-VL-1.8B | 5-shot | 34.86 | 35.81 | 42.08 | 40.79 | **1.16×** |
+| InternLM2-1.8B | 5-shot | **39.50** | **41.25** | **50.21** | **50.06** | 1.00× |
+
+- 结论：Scalpel 是一个很有潜力的剪枝后恢复训练的范式，在保持模型大幅度提速的情况下，仍保留了模型一定的泛化能力。如果以后出了更强的小参数模型，那么该方法则具备更强的潜力。
 
 ## 🚕运行方式
 
