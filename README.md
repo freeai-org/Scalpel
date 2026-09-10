@@ -1,4 +1,9 @@
 # ✂️Scalpel: Recovery-Aware Layer Pruning for Vision-Language Models
+[![GitHub Stars](https://img.shields.io/github/stars/freeai-org/Scalpel?style=flat&logo=github&label=stars)](https://github.com/freeai-org/Scalpel)
+[![License MIT](https://img.shields.io/badge/license-MIT-purple?style=flat)](LICENSE)
+[![FreeAI](https://img.shields.io/badge/-FreeAI-1f2937?style=flat)](https://freeai.example.com)
+[![InternLM 书生大模型](https://img.shields.io/badge/-InternLM‑书生大模型-blue?style=flat)](https://github.com/InternLM/InternLM)
+[![Qwen 千问大模型](https://img.shields.io/badge/-Qwen‑千问大模型-green?style=flat)](https://github.com/QwenLM/Qwen)
 
 Scalpel 能让你的模型缩小的同时，极大减少显存占用，并提高模型推理速度 20 ~ 40% 左右。Scalpel 是面向多模态大模型的逐层结构化剪枝工具。它每轮只真正删除一层，并在删除后做一次轻量恢复训练，让更小的 student 尽量保持原模型在目标任务上的输出分布和字段准确率。
 
